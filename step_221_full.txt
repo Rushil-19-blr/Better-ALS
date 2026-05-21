@@ -1,0 +1,65 @@
+Created At: 2026-05-20T13:52:27Z
+Completed At: 2026-05-20T13:52:28Z
+File Path: `file:///Users/rushilsunder/Desktop/Better%20ALS/src/main.js`
+Total Lines: 1011
+Total Bytes: 61058
+Showing lines 600 to 800
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+600:     <div class="goal-form">
+601:       <div class="section-title">Create New Goal</div>
+602:       <div class="form-row">
+603:         <div class="form-group"><label class="form-label">Subject</label><select class="form-select" id="goal-sub">${subjects.map(s=>`<option value="${s.id}">${s.name}</option>`).join('')}</select></div>
+604:         <div class="form-group"><label class="form-label">Period</label><select class="form-select" id="goal-period"><option value="daily">Daily</option><option value="weekly">Weekly</option></select></div>
+605:       </div>
+606:       <div class="form-row">
+607:         <div class="form-group"><label class="form-label">Target Questions</label><input type="number" class="form-input" id="goal-count" value="20" min="5" max="100"/></div>
+608:         <div class="form-group"><label class="form-label">Min Accuracy %</label><input type="number" class="form-input" id="goal-acc" value="70" min="0" max="100"/></div>
+609:       </div>
+610:       <button class="btn-action primary" id="goal-create"><i data-lucide="plus"></i>Create Goal</button>
+611:     </div>
+612:     ${S.goals.length ? `<div class="section-title">Active Goals</div><div class="goals-list">${S.goals.map(GoalCard).join('')}</div>` : ''}`;
+613: }
+614: 
+615: function GoalCard(g) {
+616:   const sub = getSubject(g.subjectId);
+617:   const pct = g.target > 0 ? Math.round((g.done / g.target) * 100) : 0;
+618:   const circ = 2 * Math.PI * 19;
+619:   const off = circ - (Math.min(pct, 100) / 100) * circ;
+620:   const col = pct >= 100 ? 'var(--green)' : pct >= 50 ? 'var(--accent)' : 'var(--amber)';
+
+<truncated 9657 bytes>
+767:   document.querySelectorAll('[data-start-kc]').forEach(el => el.addEventListener('click', e => { e.stopPropagation(); startPractice(el.dataset.startKc, el.dataset.startSub); }));
+768:   document.querySelectorAll('.kc-item:not([style*="pointer-events:none"])').forEach(el => el.addEventListener('click', () => { if (el.dataset.kc) startPractice(el.dataset.kc, el.dataset.sub); }));
+769: 
+770:   // Options
+771:   document.querySelectorAll('[data-option]').forEach(el => el.addEventListener('click', () => {
+772:     const qs = getQuestions(S.kc); const q = qs[S.qIdx];
+773:     if (S.answers[q.id]?.submitted) return;
+774:     S.selected = parseInt(el.dataset.option); render();
+775:   }));
+776: 
+777:   // Submit
+778:   document.getElementById('btn-submit')?.addEventListener('click', () => {
+779:     if (S.selected === null) return;
+780:     const qs = getQuestions(S.kc); const q = qs[S.qIdx];
+781:     checkSpeed(q.id);
+782:     S.answers[q.id] = { sel: S.selected, correct: q.correct, submitted: true, time: S.timerSec };
+783:     const ok = S.selected === q.correct;
+784:     if (ok) {
+785:       toast('Correct!', 'success');
+786:       // Update goal progress
+787:       S.goals.forEach(g => { if (g.subjectId === S.subject) { g.done = (g.done || 0) + 1; } });
+788:       save('goals', S.goals);
+789:     } else {
+790:       S.hints[q.id] = S.hints[q.id] || { level: 0, texts: [], loading: false, conceptText: null };
+791:     }
+792:     S.qStartTime = Date.now();
+793:     render();
+794:   });
+795: 
+796:   // Next
+797:   document.getElementById('btn-next')?.addEventListener('click', () => {
+798:     const qs = getQuestions(S.kc);
+799:     if (S.qIdx < qs.length - 1) { S.qIdx++; S.selected = null; S.retryQ = null; S.qStartTime = Date.now(); render(); }
+800:     else { toast('KC Complete!', 'success'); go('subject', { subject: S.subject }); }
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.

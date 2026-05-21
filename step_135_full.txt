@@ -1,0 +1,79 @@
+Created At: 2026-05-20T13:23:35Z
+Completed At: 2026-05-20T13:23:35Z
+File Path: `file:///Users/rushilsunder/Desktop/Better%20ALS/src/main.js`
+Total Lines: 869
+Total Bytes: 51722
+Showing lines 1 to 800
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+1: // ============================================================
+2: // NPS — Complete Application with All Features
+3: // ============================================================
+4: import './style.css';
+5: import { currentUser, subjects, notes as defaultNotes, students, getQuestions } from './data/mock-data.js';
+6: import { generateHint, explainConcept, chatWithAI, generateSimilarQuestion, answerDoubt } from './ai.js';
+7: 
+8: // ─── STATE ───────────────────────────────────────────────────
+9: const S = {
+10:   page: 'home',
+11:   theme: localStorage.getItem('nps-theme') || 'light',
+12:   subject: null,
+13:   kc: null,
+14:   qIdx: 0,
+15:   selected: null,
+16:   answers: {},       // { qId: { sel, correct, submitted, time } }
+17:   hints: {},         // { qId: { level, texts:[], loading, conceptText } }
+18:   retryQ: null,      // generated similar question
+19:   chatMsgs: [],
+20:   chatTab: 'ask',
+21:   chatLoading: false,
+22:   expanded: {},      // chapter expand
+23:   notesList: JSON.parse(localStorage.getItem('nps-notes') || 'null') || [...defaultNotes],
+24:   goals: JSON.parse(localStorage.getItem('nps-goals') || '[]'),
+25:   doubts: JSON.parse(localStorage.getItem('nps-doubts') || '[]'),
+26:   // Test Mode
+27:   test: { active: false, setup: true, subjectId: null, time: 30, perQ: false, qs: [], ans: {}, idx: 0, done: false, remaining: 0, flagged: {} },
+28:   // Anti-cheat
+29:   qStartTime: null,
+30:   tabWarnings: 0,
+31:   acOverlay: null,   // { title, text }
+<truncated 45282 bytes>
+istener('click', async () => {
+706:     const qs = getQuestions(S.kc); const q = qs[S.qIdx];
+707:     toast('Generating similar question...', 'info');
+708:     const raw = await generateSimilarQuestion(q.text);
+709:     // Parse the response
+710:     try {
+711:       const lines = raw.split('\n').filter(l => l.trim());
+712:       let text = '', opts = [], correct = 0;
+713:       lines.forEach(l => {
+714:         if (l.startsWith('QUESTION:')) text = l.replace('QUESTION:', '').trim();
+715:         else if (l.match(/^[A-D]\)/)) opts.push(l.substring(2).trim());
+716:         else if (l.startsWith('CORRECT:')) { const c = l.replace('CORRECT:','').trim(); correct = 'ABCD'.indexOf(c.charAt(0)); }
+717:         else if (!text) text += l + ' ';
+718:       });
+719:       if (!text) text = raw; // fallback
+720:       if (opts.length < 4) opts = ['Option A', 'Option B', 'Option C', 'Option D'];
+721:       S.retryQ = { text, options: opts, correct: Math.max(0, correct), submitted: false, sel: null };
+722:     } catch { S.retryQ = { text: raw, options: ['A', 'B', 'C', 'D'], correct: 0, submitted: false, sel: null }; }
+723:     S.selected = null;
+724:     render(); renderMath();
+725:   });
+726: 
+727:   // Retry option select
+728:   document.querySelectorAll('[data-retry-opt]').forEach(el => el.addEventListener('click', () => {
+729:     if (S.retryQ?.submitted) return;
+730:     S.selected = parseInt(el.dataset.retryOpt); render();
+731:   }));
+732: 
+733:   // Chat tabs
+734:   document.querySelectorAll('[data-ct]').forEach(el => el.addEventListener('click', () => { S.chatTab = el.dataset.ct; render(); }));
+735: 
+736:   // Chat send
+737:   const chatSend = document.getElementById('chat-send');
+738:   const chatIn = document.getElementById('chat-in');
+739:   if (chatSend && chatIn) {
+740:     const send = async () => {
+741:       const txt = chatIn.value.trim(); if (!txt) retur
+<truncated 3719 bytes>
+
+NOTE: The output was truncated because it was too long. Use a more targeted query or a smaller range to get the information you need.

@@ -1,0 +1,53 @@
+Created At: 2026-05-20T13:52:20Z
+Completed At: 2026-05-20T13:52:21Z
+File Path: `file:///Users/rushilsunder/Desktop/Better%20ALS/src/main.js`
+Total Lines: 1011
+Total Bytes: 61058
+Showing lines 350 to 600
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+350:   const progress = ((S.qIdx + 1) / qs.length) * 100;
+351:   const ans = S.answers[q.id];
+352:   const hint = S.hints[q.id];
+353:   const isWrong = ans?.submitted && ans.sel !== ans.correct;
+354: 
+355:   return `
+356:     <nav class="breadcrumb">
+357:       <span class="bc-item" data-nav="home">Dashboard</span><span class="bc-sep"><i data-lucide="chevron-right"></i></span>
+358:       <span class="bc-item" data-nav-sub="${sub.id}">${sub.name}</span><span class="bc-sep"><i data-lucide="chevron-right"></i></span>
+359:       <span class="bc-item current">${kcName}</span>
+360:     </nav>
+361:     <div class="practice-layout">
+362:       <div class="question-panel">
+363:         <div class="question-progress"><div class="question-progress-fill" style="width:${progress}%"></div></div>
+364:         <div class="question-top-bar">
+365:           <span class="question-number">Question ${S.qIdx + 1} of ${qs.length}</span>
+366:           <span class="question-timer"><i data-lucide="clock"></i><span id="timer">00:00</span></span>
+367:         </div>
+368:         <div class="question-body">
+369:           <div class="question-text">${S.retryQ ? S.retryQ.text : q.text}</div>
+370:           ${S.retryQ ? RetryOptions() : QuestionOptions(q, ans)}
+371:           ${isWrong && !S.retryQ ? HintsPanel(q) : ''}
+372:         </div>
+373:         <div class="question-actions">
+374:           ${!ans?.submitted ? `<button class="btn-action primary" id="btn-submit" ${S.selected === null ? 'disabled' : ''}><i data-lucide="check"></i>Submit</button>`
+375:             : isWrong ? `
+376:               <butt
+<truncated 15991 bytes>
+h>XP</th><th>Questions</th><th>Accuracy</th><th>Mastery</th></tr></thead><tbody>
+585:     ${sorted.map((s, i) => {
+586:       const rc = i===0?'gold':i===1?'silver':i===2?'bronze':'';
+587:       const ac = s.accuracy>=80?'high':s.accuracy>=60?'med':'low';
+588:       const xp = Math.round(s.questions * (s.accuracy / 100) * 10);
+589:       return `<tr class="${s.isYou?'you':''}"><td class="rank-cell ${rc}">${i+1}</td><td><div class="user-cell"><div class="user-avatar" style="background:${s.color}">${s.initials}</div><span class="user-name">${s.name}${s.isYou?'<span class="you-badge">You</span>':''}</span></div></td><td class="font-mono" style="font-size:.82rem">${xp}</td><td>${s.questions}</td><td class="acc-cell ${ac}">${s.accuracy}%</td><td><div style="display:flex;align-items:center;gap:.4rem"><div style="flex:1;height:4px;background:var(--bg-elevated);border-radius:2px;overflow:hidden"><div style="height:100%;width:${s.mastery}%;background:${s.mastery>=70?'var(--green)':s.mastery>=50?'var(--amber)':'var(--red)'};border-radius:2px"></div></div><span class="font-mono" style="font-size:.78rem">${s.mastery}%</span></div></td></tr>`;
+590:     }).join('')}
+591:     </tbody></table>`;
+592: }
+593: 
+594: // ════════════════════════════════════════════════════════════
+595: //  GOALS
+596: // ════════════════════════════════════════════════════════════
+597: function GoalsPage() {
+598:   return `
+599:     <header class="page-header"><div><h1 class="greeting" style="font-size:1.35rem">Goals & Targets</h1><p class="greeting-sub">Set daily or weekly targets</p></div></header>
+600:     <div class="goal-form">
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
