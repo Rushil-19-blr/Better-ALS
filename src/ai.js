@@ -50,7 +50,7 @@ export async function chatWithAI(questionText, userMessage, history = []) {
 
 export async function generateSimilarQuestion(questionText) {
   return callGemini(
-    `Generate a JEE-style question similar in concept but with DIFFERENT numerical values. Return in this exact format:\nQUESTION: [text with LaTeX \\( \\) notation]\nA) [option]\nB) [option]\nC) [option]\nD) [option]\nCORRECT: [A/B/C/D]\n\nOriginal: ${questionText}`,
+    `Generate a JEE-style question similar in concept but with DIFFERENT numerical values. DO NOT use markdown code blocks (\`\`\`). Return in this EXACT plain text format:\nQUESTION: [text with LaTeX \\( \\) notation]\nA) [option]\nB) [option]\nC) [option]\nD) [option]\nCORRECT: [A/B/C/D]\n\nOriginal: ${questionText}`,
     512
   );
 }

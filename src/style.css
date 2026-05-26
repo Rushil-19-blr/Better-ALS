@@ -95,10 +95,10 @@
 /* ── Reset ── */
 *,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
 html{font-size:16px;-webkit-font-smoothing:antialiased}
-body{font-family:'Inter',system-ui,sans-serif;background:var(--bg);color:var(--text);min-height:100vh;overflow-x:hidden;line-height:1.5;transition:background .3s,color .3s}
+body{font-family:'Space Grotesk','Inter',system-ui,sans-serif;background:var(--bg);color:var(--text);min-height:100vh;overflow-x:hidden;line-height:1.5;transition:background .3s,color .3s}
 
-/* Playfair Display for display headings */
-.display-font, .subject-title, .greeting, h1.greeting, .big-num { font-family:'Playfair Display', Georgia, serif; }
+/* Space Grotesk for all display headings */
+.display-font, .subject-title, .greeting, h1.greeting, .big-num { font-family:'Space Grotesk', system-ui, sans-serif; }
 a{color:inherit;text-decoration:none}
 button{font-family:inherit;cursor:pointer;border:none;background:none}
 input,textarea,select{font-family:inherit;outline:none}
@@ -126,7 +126,7 @@ ul,ol{list-style:none}
 
 /* ── Header ── */
 .page-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:1.75rem}
-.greeting{font-size:1.6rem;font-weight:800;letter-spacing:-.02em;font-family:'Playfair Display',Georgia,serif}
+.greeting{font-size:1.6rem;font-weight:700;letter-spacing:-.03em;font-family:'Space Grotesk',system-ui,sans-serif}
 .greeting-sub{font-size:.88rem;color:var(--text-secondary);margin-top:.15rem}
 .header-actions{display:flex;align-items:center;gap:.6rem}
 .btn-pill{display:inline-flex;align-items:center;gap:.4rem;padding:.4rem .85rem;background:var(--bg-surface);border:1px solid var(--border);border-radius:var(--radius-pill);color:var(--text-secondary);font-size:.8rem;font-weight:500;transition:all .15s;box-shadow:var(--shadow-xs)}
@@ -210,7 +210,7 @@ ul,ol{list-style:none}
 .subject-icon-wrap{width:3.5rem;height:3.5rem;border-radius:var(--radius-lg);background:rgba(255,255,255,.05);display:flex;align-items:center;justify-content:center;margin-bottom:auto;border:1px solid rgba(255,255,255,0.1);backdrop-filter:var(--glass-blur);transition:background .3s, border-color .3s, box-shadow .3s}
 .subject-card:hover .subject-icon-wrap{background:rgba(255,255,255,.1);border-color:rgba(255,255,255,.2);box-shadow:0 0 20px rgba(255,255,255,.1)}
 .subject-icon-wrap svg{width:20px;height:20px}
-.subject-title{font-size:1.85rem;font-weight:800;letter-spacing:-.04em;line-height:1.1;margin-bottom:.2rem}
+.subject-title{font-size:1.85rem;font-weight:700;letter-spacing:-.03em;line-height:1.1;margin-bottom:.2rem}
 .subject-subtitle{font-size:.85rem;color:var(--text-secondary);font-weight:500;margin-bottom:.75rem}
 .subject-stats-panel{background:rgba(0,0,0,.3);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border:1px solid rgba(255,255,255,.08);border-radius:var(--radius-lg);padding:1.1rem;opacity:0;transform:translateY(8px);transition:all .3s var(--ease)}
 .subject-card:hover .subject-stats-panel{opacity:1;transform:translateY(0)}
@@ -461,7 +461,7 @@ ul,ol{list-style:none}
 .mastery-overview{display:grid;grid-template-columns:repeat(3,1fr);gap:.85rem;margin-bottom:1.5rem}
 .mastery-card{background:var(--bg-surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:1.25rem;text-align:center;box-shadow:var(--shadow-xs)}
 .mastery-card h4{font-size:.82rem;font-weight:600;color:var(--text-secondary);margin-bottom:.65rem}
-.mastery-card .big-num{font-size:2rem;font-weight:800;letter-spacing:-.03em}
+.mastery-card .big-num{font-size:2rem;font-weight:700;letter-spacing:-.03em}
 .heat-map{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:.5rem}
 .heat-cell{padding:.65rem;border-radius:var(--radius-md);text-align:center;font-size:.78rem;font-weight:600;border:1px solid var(--border)}
 .weak-item{display:flex;align-items:center;gap:.75rem;padding:.75rem 1rem;background:var(--bg-surface);border:1px solid var(--border);border-radius:var(--radius-md);margin-bottom:.4rem}
@@ -592,7 +592,7 @@ ul,ol{list-style:none}
 .streak-dot.inactive{color:rgba(255,255,255,0.2)}
 .streak-day-label{font-size:.65rem;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em}
 .streak-footer{display:flex;align-items:center;gap:.6rem;padding-top:.85rem;border-top:1px solid rgba(255,255,255,0.06);font-size:.82rem;color:var(--text-secondary)}
-.streak-footer strong{color:var(--text);font-family:'Playfair Display',Georgia,serif;font-size:1.1rem;margin-left:0.2rem}
+.streak-footer strong{color:var(--text);font-family:'Space Grotesk',system-ui,sans-serif;font-size:1.1rem;margin-left:0.2rem}
 
 /* ══════════════════════════════════════════════════
    DOUBT STAGE PILLS
@@ -630,4 +630,102 @@ ul,ol{list-style:none}
 .subject-breakdown-card .breakdown-header{padding:1rem 1.25rem;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:.6rem}
 .breakdown-header-title{margin:0;font-size:.95rem;font-weight:700;color:var(--text)}
 
+/* ══════════════════════════════════════════════════
+   TYPEWRITER COMPONENT
+   ══════════════════════════════════════════════════ */
+.typewriter-wrap { display:inline; }
+.typewriter-cursor {
+  display:inline-block;
+  width:3px;
+  height:0.9em;
+  background:var(--accent);
+  margin-left:3px;
+  vertical-align:middle;
+  border-radius:2px;
+  animation:twBlink 0.85s steps(1) infinite;
+}
+@keyframes twBlink { 0%,49%{opacity:1} 50%,100%{opacity:0} }
+
+/* ══════════════════════════════════════════════════
+   SPECIAL-TEXT SCRAMBLE (login badge)
+   ══════════════════════════════════════════════════ */
+.special-text-badge {
+  font-family:'JetBrains Mono',monospace;
+  letter-spacing:0.06em;
+  display:inline;
+}
+
+/* ══════════════════════════════════════════════════
+   MATRIX TEXT (greeting + page titles)
+   ══════════════════════════════════════════════════ */
+.matrix-char {
+  display:inline-block;
+  transition:color 0.05s ease, text-shadow 0.05s ease;
+}
+.matrix-char.flipping {
+  color:#00ff41;
+  text-shadow:0 0 12px rgba(0,255,65,0.7), 0 0 24px rgba(0,255,65,0.3);
+  font-family:'JetBrains Mono',monospace;
+}
+
+/* ══════════════════════════════════════════════════
+   BACKGROUND BOXES (login page)
+   ══════════════════════════════════════════════════ */
+.login-bg-boxes {
+  position:absolute;
+  inset:0;
+  overflow:hidden;
+  pointer-events:none;
+  z-index:0;
+}
+.login-bg-boxes-inner {
+  position:absolute;
+  left:50%;
+  top:50%;
+  display:flex;
+  transform:translate(-40%,-60%) skewX(-48deg) skewY(14deg) scale(0.675);
+  pointer-events:auto;
+}
+.bg-box-row {
+  width:64px;
+  flex-shrink:0;
+  display:flex;
+  flex-direction:column;
+  border-left:1px solid rgba(148,163,184,0.10);
+}
+.bg-box-cell {
+  width:64px;
+  height:32px;
+  border-right:1px solid rgba(148,163,184,0.10);
+  border-top:1px solid rgba(148,163,184,0.10);
+  position:relative;
+  transition:background-color 0.5s ease;
+  flex-shrink:0;
+}
+.bg-box-cell:hover { transition:background-color 0s; }
+.bg-box-cell .box-cross {
+  position:absolute;
+  top:-14px;
+  left:-22px;
+  width:40px;
+  height:24px;
+  color:rgba(148,163,184,0.10);
+  pointer-events:none;
+}
+
+/* ══════════════════════════════════════════════════
+   BEAMS BACKGROUND CANVAS (dashboard)
+   ══════════════════════════════════════════════════ */
+#beams-canvas-bg {
+  position:fixed;
+  inset:0;
+  width:100%;
+  height:100%;
+  pointer-events:none;
+  z-index:0;
+}
+.home-page-wrap {
+  position:relative;
+  z-index:1;
+}
 

@@ -156,8 +156,357 @@ function getKcInfo(subId, kcId) {
   return {};
 }
 
+// ═══════════════════════════════════════════════════════════
+//  ANIMATION UTILITIES
+// ═══════════════════════════════════════════════════════════
+
+// ── 1. Typewriter ────────────────────────────────────────────
+function startTypewriter(el, texts, { speed = 60, deleteSpeed = 35, waitTime = 2000, initialDelay = 400 } = {}) {
+  if (!el) return;
+  let textIdx = 0, charIdx = 0, deleting = false;
+  let timeout;
+
+  function type() {
+    const current = texts[textIdx];
+    if (deleting) {
+      el.textContent = current.slice(0, charIdx--);
+      if (charIdx < 0) {
+        deleting = false;
+        textIdx = (textIdx + 1) % texts.length;
+        charIdx = 0;
+        timeout = setTimeout(type, 300);
+        return;
+      }
+      timeout = setTimeout(type, deleteSpeed);
+    } else {
+      el.textContent = current.slice(0, charIdx++);
+      if (charIdx > current.length) {
+        if (texts.length > 1) {
+          timeout = setTimeout(() => { deleting = true; type(); }, waitTime);
+        }
+        return;
+      }
+      timeout = setTimeout(type, speed);
+    }
+  }
+  timeout = setTimeout(type, initialDelay);
+  return () => clearTimeout(timeout);
+}
+
+// ── 2. Special-Text Scramble (badge) ─────────────────────────
+const SCRAMBLE_CHARS = '_!X$0-+*#@%?&=';
+function startSpecialTextScramble(el, finalText, { speed = 22, delay = 300 } = {}) {
+  if (!el) return;
+  const len = finalText.length;
+  let step = 0;
+  const maxSteps = len * 2;
+  let interval;
+
+  function getRandomChar(prev) {
+    let c;
+    do { c = SCRAMBLE_CHARS[Math.floor(Math.random() * SCRAMBLE_CHARS.length)]; } while (c === prev);
+    return c;
+  }
+
+  setTimeout(() => {
+    interval = setInterval(() => {
+      if (step <= maxSteps) {
+        // Phase 1: fill with random chars up to current length
+        const currentLen = Math.min(step + 1, len);
+        let chars = [];
+        for (let i = 0; i < currentLen; i++) chars.push(getRandomChar(chars[i-1]));
+        for (let i = currentLen; i < len; i++) chars.push('\u00A0');
+        el.textContent = chars.join('');
+        step++;
+      } else {
+        // Phase 2: reveal real chars progressively
+        const revealIdx = step - maxSteps;
+        const revealedCount = Math.floor(revealIdx / 2);
+        let chars = [];
+        for (let i = 0; i < revealedCount && i < len; i++) chars.push(finalText[i]);
+        if (revealedCount < len) {
+          chars.push(revealIdx % 2 === 0 ? '_' : getRandomChar());
+          for (let i = chars.length; i < len; i++) chars.push(getRandomChar(chars[i-1]));
+        }
+        el.textContent = chars.join('');
+        step++;
+        if (revealedCount >= len) {
+          el.textContent = finalText;
+          clearInterval(interval);
+        }
+      }
+    }, speed);
+  }, delay);
+}
+
+// ── 3. Matrix Binary Flip (greeting) ─────────────────────────
+function startMatrixFlip(el, finalText, { resolveInterval = 55, holdTime = 700, initialDelay = 0, flickerRate = 90 } = {}) {
+  if (!el) return;
+  const chars = finalText.split('');
+
+  // Immediately render all chars as binary with green glow
+  el.innerHTML = chars.map(ch => {
+    const flippable = ch !== ' ' && ch !== ',' && ch !== '.' && ch !== '!';
+    return `<span class="matrix-char${flippable ? ' flipping' : ''}" data-final="${ch}">${
+      flippable ? (Math.random() > 0.5 ? '1' : '0') : ch
+    }</span>`;
+  }).join('');
+
+  // Flicker all binary chars while they "hold"
+  const flickerTimer = setInterval(() => {
+    el.querySelectorAll('.matrix-char.flipping').forEach(span => {
+      span.textContent = Math.random() > 0.5 ? '1' : '0';
+    });
+  }, flickerRate);
+
+  // After holdTime, resolve left-to-right
+  setTimeout(() => {
+    clearInterval(flickerTimer);
+    const spans = el.querySelectorAll('.matrix-char');
+    let i = 0;
+    const resolver = setInterval(() => {
+      if (i >= spans.length) { clearInterval(resolver); return; }
+      const span = spans[i];
+      span.classList.remove('flipping');
+      span.textContent = span.dataset.final;
+      i++;
+    }, resolveInterval);
+  }, initialDelay + holdTime);
+}
+
+// ── 3b. Sequential Matrix Flip — one char at a time (MatrixText style)
+//        Each letter individually goes binary → flickers → resolves before the next starts
+function startMatrixFlipSequential(el, finalText, { letterDuration = 420, letterInterval = 95, initialDelay = 0 } = {}) {
+  if (!el) return;
+  el.innerHTML = finalText.split('').map(ch =>
+    `<span class="matrix-char" data-final="${ch}">${ch}</span>`
+  ).join('');
+
+  setTimeout(() => {
+    const spans = el.querySelectorAll('.matrix-char');
+    let i = 0;
+
+    function animateNext() {
+      if (i >= spans.length) return;
+      const span = spans[i];
+      const final = span.dataset.final;
+      if (final !== ' ' && final !== ',' && final !== '.' && final !== '!') {
+        span.classList.add('flipping');
+        span.textContent = Math.random() > 0.5 ? '1' : '0';
+        // Flicker a couple of times during the hold
+        const flk = setInterval(() => {
+          span.textContent = Math.random() > 0.5 ? '1' : '0';
+        }, 85);
+        setTimeout(() => {
+          clearInterval(flk);
+          span.classList.remove('flipping');
+          span.textContent = final;
+        }, letterDuration);
+      }
+      i++;
+      setTimeout(animateNext, letterInterval);
+    }
+    animateNext();
+  }, initialDelay);
+}
+
+// ── 3c. Matrix Rain — the classic falling character rain (red-tinted)
+//        For login page background. Canvas must already be in the DOM.
+function startMatrixRain(canvas) {
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  // Mix of binary + katakana-range symbols for authentic feel
+  const CHARS = '01アイウエオカキクサシスセソタチツラリルレロナニヌネ01ハヒフへホマミムメモ0110';
+  const FS = 13;
+  let drops = [];
+  let animId;
+  let frameCount = 0;
+
+  function resize() {
+    canvas.width  = window.innerWidth;
+    canvas.height = window.innerHeight;
+    const cols = Math.floor(canvas.width / FS);
+    // Stagger drop start positions
+    drops = Array.from({ length: cols }, () => Math.random() * -(canvas.height / FS));
+  }
+
+  function draw() {
+    frameCount++;
+    // Only update every 2nd frame for a slightly slower, more readable rain
+    if (frameCount % 2 !== 0) {
+      animId = requestAnimationFrame(draw);
+      return;
+    }
+
+    // Fade previous frame — this creates the trailing glow effect
+    ctx.fillStyle = 'rgba(16, 12, 13, 0.07)';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    ctx.font = `${FS}px "JetBrains Mono", monospace`;
+
+    drops.forEach((y, i) => {
+      const ch = CHARS[Math.floor(Math.random() * CHARS.length)];
+      const x  = i * FS;
+      const py = y * FS;
+
+      // Lead char: bright accent
+      ctx.fillStyle = 'rgba(225, 60, 80, 0.85)';
+      ctx.fillText(ch, x, py);
+
+      // One char behind: white-hot highlight
+      if (y > 1) {
+        ctx.fillStyle = 'rgba(255, 180, 190, 0.5)';
+        ctx.fillText(CHARS[Math.floor(Math.random() * CHARS.length)], x, py - FS);
+      }
+
+      // Reset column randomly when it passes bottom
+      if (py > canvas.height && Math.random() > 0.975) {
+        drops[i] = 0;
+      }
+      drops[i] += 0.5; // speed: slow & creepy
+    });
+
+    animId = requestAnimationFrame(draw);
+  }
+
+  resize();
+  window.addEventListener('resize', resize);
+  draw();
+
+  return () => {
+    cancelAnimationFrame(animId);
+    window.removeEventListener('resize', resize);
+  };
+}
+
+// ── 4. Background Boxes (login) ───────────────────────────────
+function buildBackgroundBoxes(container) {
+  const BOX_COLORS = [
+    'rgba(125,211,252,0.18)', // sky
+    'rgba(249,168,212,0.18)', // pink
+    'rgba(134,239,172,0.18)', // green
+    'rgba(253,224,71,0.18)',  // yellow
+    'rgba(252,165,165,0.18)', // red
+    'rgba(216,180,254,0.18)', // purple
+    'rgba(178,43,61,0.22)',   // accent red
+    'rgba(147,197,253,0.18)', // blue
+  ];
+  const ROWS = 80, COLS = 50;
+  const inner = document.createElement('div');
+  inner.className = 'login-bg-boxes-inner';
+
+  for (let r = 0; r < ROWS; r++) {
+    const row = document.createElement('div');
+    row.className = 'bg-box-row';
+    for (let c = 0; c < COLS; c++) {
+      const cell = document.createElement('div');
+      cell.className = 'bg-box-cell';
+      // Add cross SVG at even positions
+      if (r % 2 === 0 && c % 2 === 0) {
+        cell.innerHTML = `<svg class="box-cross" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6v12m6-6H6"/></svg>`;
+      }
+      // Hover color flash
+      cell.addEventListener('mouseenter', () => {
+        cell.style.backgroundColor = BOX_COLORS[Math.floor(Math.random() * BOX_COLORS.length)];
+      });
+      cell.addEventListener('mouseleave', () => {
+        cell.style.backgroundColor = '';
+      });
+      row.appendChild(cell);
+    }
+    inner.appendChild(row);
+  }
+  container.appendChild(inner);
+}
+
+// ── 5. Beams Background Canvas (dashboard) ───────────────────
+function startBeamsBackground(canvas) {
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  let beams = [];
+  let animId;
+
+  function createBeam() {
+    const w = canvas.width, h = canvas.height;
+    const angle = -32 + Math.random() * 8;
+    return {
+      x: Math.random() * w * 1.5 - w * 0.25,
+      y: h + 100,
+      width: 40 + Math.random() * 80,
+      length: h * 2.5,
+      angle,
+      speed: 0.4 + Math.random() * 0.6,
+      opacity: 0.03 + Math.random() * 0.05,  // very faint
+      hue: 340 + Math.random() * 20,          // red-toned: 340-360
+      pulse: Math.random() * Math.PI * 2,
+      pulseSpeed: 0.015 + Math.random() * 0.025,
+    };
+  }
+
+  function resize() {
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = window.innerWidth * dpr;
+    canvas.height = window.innerHeight * dpr;
+    canvas.style.width = window.innerWidth + 'px';
+    canvas.style.height = window.innerHeight + 'px';
+    ctx.scale(dpr, dpr);
+    beams = Array.from({ length: 18 }, createBeam);
+    // Spread them out vertically so some start mid-screen
+    beams.forEach((b, i) => { b.y = (window.innerHeight / 18) * i - 100; });
+  }
+
+  function drawBeam(b) {
+    ctx.save();
+    ctx.translate(b.x, b.y);
+    ctx.rotate(b.angle * Math.PI / 180);
+    const pulse = b.opacity * (0.8 + Math.sin(b.pulse) * 0.2);
+    const grad = ctx.createLinearGradient(0, 0, 0, b.length);
+    grad.addColorStop(0,   `hsla(${b.hue},80%,60%,0)`);
+    grad.addColorStop(0.1, `hsla(${b.hue},80%,60%,${pulse * 0.5})`);
+    grad.addColorStop(0.4, `hsla(${b.hue},80%,60%,${pulse})`);
+    grad.addColorStop(0.6, `hsla(${b.hue},80%,60%,${pulse})`);
+    grad.addColorStop(0.9, `hsla(${b.hue},80%,60%,${pulse * 0.5})`);
+    grad.addColorStop(1,   `hsla(${b.hue},80%,60%,0)`);
+    ctx.fillStyle = grad;
+    ctx.fillRect(-b.width / 2, 0, b.width, b.length);
+    ctx.restore();
+  }
+
+  function animate() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.filter = 'blur(30px)';
+    beams.forEach(b => {
+      b.y -= b.speed;
+      b.pulse += b.pulseSpeed;
+      if (b.y + b.length < -100) {
+        Object.assign(b, createBeam());
+        b.y = window.innerHeight + 100;
+      }
+      drawBeam(b);
+    });
+    animId = requestAnimationFrame(animate);
+  }
+
+  resize();
+  window.addEventListener('resize', resize);
+  animate();
+
+  return () => {
+    cancelAnimationFrame(animId);
+    window.removeEventListener('resize', resize);
+  };
+}
+
+// Beams animation cleanup handle (kept across renders)
+let _beamsCleanup = null;
+
 // ─── NAVIGATION ─────────────────────────────────────────────
 function go(page, params = {}) {
+  // Stop beams canvas when leaving home
+  if (S.page === 'home' && page !== 'home' && _beamsCleanup) {
+    _beamsCleanup();
+    _beamsCleanup = null;
+  }
   S.page = page;
   Object.assign(S, params);
   S.selected = null;
@@ -176,6 +525,8 @@ function startPractice(kcId, subId) {
 }
 
 // ─── RENDER ─────────────────────────────────────────────────
+let _renderedPage = null; // track last rendered page for blink fix
+
 function render() {
   if (S.authLoading) {
     document.getElementById('app').innerHTML = `<div style="display:flex;height:100vh;align-items:center;justify-content:center;color:var(--text);font-size:1.2rem;">Loading...</div>`;
@@ -183,14 +534,19 @@ function render() {
   }
   if (!S.user) {
     document.getElementById('app').innerHTML = LoginPage();
+    _renderedPage = 'login';
     bindLogin();
     return;
   }
 
+  // Only animate on actual page change — stops the blink on in-page interactions
+  const isPageChange = _renderedPage !== S.page;
+  _renderedPage = S.page;
+
   document.getElementById('app').innerHTML = `
     <div class="app-layout">
       ${Sidebar()}
-      <div class="page-content fade-in">${Page()}</div>
+      <div class="page-content ${isPageChange ? 'fade-in' : ''}">${Page()}</div>
     </div>
     ${S.page !== 'test-active' ? `<button class="fab-report" id="fab-report"><i data-lucide="flag"></i>Report Issue</button>` : ''}
     <div class="toast-container" id="toasts"></div>
@@ -266,11 +622,21 @@ function Page() {
 // ════════════════════════════════════════════════════════════
 function LoginPage() {
   return `
-    <div style="min-height:100vh;background:radial-gradient(circle at top, rgba(225, 41, 63, 0.05) 0%, var(--bg) 70%);color:var(--text);overflow-x:hidden;font-family:'Inter', sans-serif;display:flex;flex-direction:column;justify-content:space-between;box-sizing:border-box;">
+    <div style="position:relative;min-height:100vh;background:radial-gradient(circle at top, rgba(178,43,61,0.06) 0%, var(--bg) 65%);color:var(--text);overflow:hidden;font-family:'Inter', sans-serif;display:flex;flex-direction:column;justify-content:space-between;box-sizing:border-box;">
+
+      <!-- Matrix rain background -->
+      <canvas id="login-rain-canvas" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:0;opacity:0.18;"></canvas>
+
+      <!-- Animated background boxes -->
+      <div class="login-bg-boxes" id="login-boxes-wrap"></div>
+
+      <!-- Radial mask so boxes don't overpower the hero -->
+      <div style="position:absolute;inset:0;background:radial-gradient(ellipse 70% 70% at 50% 40%, transparent 30%, var(--bg) 80%);pointer-events:none;z-index:1;"></div>
+
       <!-- Navigation -->
-      <nav style="display:flex;justify-content:space-between;align-items:center;padding:2rem 5%;max-width:1200px;width:100%;margin:0 auto;box-sizing:border-box;">
+      <nav style="position:relative;z-index:2;display:flex;justify-content:space-between;align-items:center;padding:2rem 5%;max-width:1200px;width:100%;margin:0 auto;box-sizing:border-box;">
         <div style="display:flex;align-items:center;gap:0.75rem;">
-          <div style="width:40px;height:40px;background:var(--accent);border-radius:12px;display:flex;align-items:center;justify-content:center;color:#fff;box-shadow:0 4px 12px rgba(225, 41, 63, 0.25);">
+          <div style="width:40px;height:40px;background:var(--accent);border-radius:12px;display:flex;align-items:center;justify-content:center;color:#fff;box-shadow:0 4px 12px rgba(178,43,61,0.3);">
             <i data-lucide="brain"></i>
           </div>
           <span style="font-size:1.35rem;font-weight:800;letter-spacing:-0.03em;background:linear-gradient(to right, #fff, #b0a8aa);-webkit-background-clip:text;-webkit-text-fill-color:transparent;">NPS ALS</span>
@@ -278,23 +644,31 @@ function LoginPage() {
       </nav>
 
       <!-- Hero Section -->
-      <header style="text-align:center;padding:4rem 1.5rem;max-width:800px;margin:auto auto;display:flex;flex-direction:column;align-items:center;box-sizing:border-box;">
-        <div style="display:inline-flex;align-items:center;gap:0.5rem;background:rgba(225, 41, 63, 0.08);color:var(--accent);padding:0.5rem 1.25rem;border-radius:999px;font-size:0.82rem;font-weight:600;margin-bottom:2.5rem;border:1px solid rgba(225, 41, 63, 0.15);letter-spacing:0.02em;">
-          <i data-lucide="sparkles" style="width:14px;height:14px;"></i> THE ADVANCED LEARNING SYSTEM
+      <header style="position:relative;z-index:2;text-align:center;padding:4rem 1.5rem;max-width:820px;margin:0 auto;display:flex;flex-direction:column;align-items:center;box-sizing:border-box;">
+
+        <!-- Special-text scramble badge -->
+        <div style="display:inline-flex;align-items:center;gap:0.5rem;background:rgba(178,43,61,0.08);color:var(--accent);padding:0.5rem 1.25rem;border-radius:999px;font-size:0.78rem;font-weight:700;margin-bottom:2.5rem;border:1px solid rgba(178,43,61,0.18);letter-spacing:0.02em;">
+          <i data-lucide="sparkles" style="width:14px;height:14px;flex-shrink:0;"></i>
+          <span class="special-text-badge" id="badge-scramble">THE ADVANCED LEARNING SYSTEM</span>
         </div>
-        <h1 style="font-size:clamp(2.3rem, 7vw, 4.25rem);font-weight:850;line-height:1.05;letter-spacing:-0.04em;margin-bottom:1.5rem;background:linear-gradient(135deg, #ffffff 30%, #a29ba0 100%);-webkit-background-clip:text;-webkit-text-fill-color:transparent;">
-          Master your JEE prep<br>with AI-powered learning
+
+        <!-- Typewriter H1 -->
+        <h1 style="font-size:clamp(2.3rem, 7vw, 4.25rem);font-weight:850;line-height:1.1;letter-spacing:-0.04em;margin-bottom:1.5rem;background:linear-gradient(135deg, #ffffff 30%, #a29ba0 100%);-webkit-background-clip:text;-webkit-text-fill-color:transparent;">
+          Master JEE<br>
+          <span id="tw-target" style="display:inline;"></span><span class="typewriter-cursor" id="tw-cursor"></span>
         </h1>
+
         <p style="font-size:1.05rem;color:var(--text-secondary);max-width:540px;margin:0 auto 3rem;line-height:1.6;font-weight:400;letter-spacing:-0.01em;">
           An adaptive practice platform that helps you build deep subject mastery through progressive AI guidance.
         </p>
-        <button id="btn-login-hero" class="btn-action primary" style="font-size:1.1rem;padding:0.9rem 2.25rem;border-radius:999px;box-shadow:0 8px 24px rgba(225, 41, 63, 0.3);transition:transform 0.2s, box-shadow 0.2s;display:inline-flex;align-items:center;gap:0.75rem;font-weight:600;border:none;cursor:pointer;">
+
+        <button id="btn-login-hero" class="btn-action primary" style="font-size:1.1rem;padding:0.9rem 2.25rem;border-radius:999px;box-shadow:0 8px 24px rgba(178,43,61,0.35);transition:transform 0.2s, box-shadow 0.2s;display:inline-flex;align-items:center;gap:0.75rem;font-weight:600;border:none;cursor:pointer;">
           <i data-lucide="google"></i> Continue with Google
         </button>
       </header>
 
       <!-- Footer -->
-      <footer style="text-align:center;padding:2.5rem;color:var(--text-muted);font-size:0.8rem;letter-spacing:0.01em;">
+      <footer style="position:relative;z-index:2;text-align:center;padding:2.5rem;color:var(--text-muted);font-size:0.8rem;letter-spacing:0.01em;">
         &copy; 2026 NPS ALS. Built for JEE Aspirants.
       </footer>
     </div>
@@ -303,7 +677,29 @@ function LoginPage() {
 
 function bindLogin() {
   lucide?.createIcons();
-  
+
+  // ── Matrix rain canvas ────────────────────────────────────
+  const rainCanvas = document.getElementById('login-rain-canvas');
+  if (rainCanvas) startMatrixRain(rainCanvas);
+
+  // ── Background boxes ────────────────────────────────────
+  const boxWrap = document.getElementById('login-boxes-wrap');
+  if (boxWrap) buildBackgroundBoxes(boxWrap);
+
+  // ── Badge scramble ───────────────────────────────────────
+  const badgeEl = document.getElementById('badge-scramble');
+  if (badgeEl) startSpecialTextScramble(badgeEl, 'THE ADVANCED LEARNING SYSTEM', { speed: 20, delay: 200 });
+
+  // ── Typewriter hero ──────────────────────────────────────
+  const twEl = document.getElementById('tw-target');
+  if (twEl) startTypewriter(twEl, [
+    'one question at a time.',
+    'Physics, Chemistry & Maths.',
+    'with AI-powered guidance.',
+    'and beat the JEE.',
+    'smarter every session.',
+  ], { speed: 65, deleteSpeed: 30, waitTime: 1800, initialDelay: 1200 });
+
   const handleLogin = async () => {
     try {
       await signInWithGoogle();
@@ -351,14 +747,43 @@ function getStreakDays() {
   return days;
 }
 
+// ── Beams + Matrix init (called after render) ─────────────────
+function initHomeAnimations() {
+  // Beams canvas
+  const canvas = document.getElementById('beams-canvas-bg');
+  if (canvas) {
+    if (_beamsCleanup) _beamsCleanup();
+    _beamsCleanup = startBeamsBackground(canvas);
+  }
+  // All-at-once binary flip on the big greeting ("Hi Rushil,")
+  const greetingEl = document.getElementById('home-greeting');
+  if (greetingEl) {
+    const finalText = greetingEl.textContent;
+    startMatrixFlip(greetingEl, finalText, { holdTime: 800, resolveInterval: 60, flickerRate: 90 });
+  }
+  // Sequential flip on the subheading — more subtle, starts after greeting resolves
+  const greetingSubEl = document.querySelector('.greeting-sub');
+  if (greetingSubEl) {
+    const subText = greetingSubEl.textContent;
+    startMatrixFlipSequential(greetingSubEl, subText, {
+      letterDuration: 280,
+      letterInterval: 55,
+      initialDelay: 900, // start after the greeting's hold period
+    });
+  }
+}
+
 function HomePage() {
   const streakDays = getStreakDays();
   const notifications = S.notifications || [];
   const hasUnread = notifications.some(n => !n.read);
   const streakOpen = S.streakOpen || false;
+  const firstName = S.user?.displayName?.split(' ')[0] || 'Student';
   return `
+    <canvas id="beams-canvas-bg"></canvas>
+    <div class="home-page-wrap">
     <header class="page-header">
-      <div><h1 class="greeting">Hi ${S.user?.displayName?.split(' ')[0] || 'Student'},</h1><p class="greeting-sub">Let's keep the momentum going.</p></div>
+      <div><h1 class="greeting" id="home-greeting">Hi ${firstName},</h1><p class="greeting-sub">Let's keep the momentum going.</p></div>
       <div class="header-actions">
         <button class="btn-pill"><i data-lucide="zap" style="color:var(--accent);"></i>${S.xp} XP</button>
         
@@ -437,6 +862,7 @@ function HomePage() {
           </div>
         </div>`;
       }).join('')}
+    </div>
     </div>`;
 }
 
@@ -455,7 +881,7 @@ function SubjectPage() {
   const dynamicMastery = totalQs > 0 ? Math.round(correctQs / totalQs * 100) : sub.mastery;
   return `
     <nav class="breadcrumb"><span class="bc-item" data-nav="home"><i data-lucide="home" style="width:14px;height:14px;"></i> Dashboard</span><span class="bc-sep">/</span><span class="bc-item current">${sub.name}</span></nav>
-    <div class="page-title-bar"><h2 class="page-title">${sub.name}</h2><span class="score-badge"><i data-lucide="award"></i>Mastery: ${dynamicMastery}%</span></div>
+    <div class="page-title-bar"><h2 class="page-title" id="page-title-mx">${sub.name}</h2><span class="score-badge"><i data-lucide="award"></i>Mastery: ${dynamicMastery}%</span></div>
     <div class="chapter-list">${sub.chapters.map(ch => ChapterGroup(ch, sub)).join('')}</div>`;
 }
 
@@ -528,12 +954,15 @@ function PracticePage() {
           <div class="question-text">${S.retryQ ? S.retryQ.text : q.text}</div>
           ${S.retryQ ? RetryOptions() : QuestionOptions(q, ans)}
           ${isWrong && !S.retryQ ? HintsPanel(q) : ''}
+          ${isWrong && !S.retryQ ? `<button class="btn-action primary" data-action="retry" style="margin-top: 1rem; width: 100%; justify-content: center; background: var(--green); border-color: var(--green);"><i data-lucide="refresh-cw"></i>Try Similar Question</button>` : ''}
         </div>
         <div class="question-actions">
-          ${!ans?.submitted ? `<button class="btn-action primary" id="btn-submit" ${S.selected === null || ans?.wrongAttempts?.includes(S.selected) ? 'disabled' : ''}><i data-lucide="check"></i>Submit</button>`
+          ${(S.retryQ ? !S.retryQ.submitted : !ans?.submitted) ? 
+            `<button class="btn-action primary" id="btn-submit" ${S.selected === null || (!S.retryQ && ans?.wrongAttempts?.includes(S.selected)) ? 'disabled' : ''}><i data-lucide="check"></i>Submit</button>`
             : `<button class="btn-action primary" id="btn-next"><i data-lucide="arrow-right"></i>Next</button>`
           }
-          ${!ans?.submitted ? `<button class="btn-action ghost" id="btn-skip">Skip</button>` : ''}
+          ${(!S.retryQ && !ans?.submitted) ? `<button class="btn-action ghost" id="btn-skip">Skip</button>` : ''}
+          ${S.retryQ && !S.retryQ.submitted ? `<button class="btn-action ghost" id="btn-skip-retry">Back to Original</button>` : ''}
           <div class="q-dots">${qs.map((_, i) => {
             let c = 'q-dot';
             const a = S.answers[qs[i].id];
@@ -587,7 +1016,6 @@ function HintsPanel(q) {
     <div class="hint-actions">
       ${h.level < 3 && !h.loading ? `<button class="btn-action secondary" data-action="hint"><i data-lucide="lightbulb"></i>Hint ${h.level + 1}/3</button>` : ''}
       ${!h.conceptText && !h.loading ? `<button class="btn-action ghost" data-action="concept"><i data-lucide="book-open"></i>Explain Concept</button>` : ''}
-      ${h.level > 0 && h.level < 3 ? `<button class="btn-action green" data-action="tryagain"><i data-lucide="rotate-ccw"></i>Try Again</button>` : ''}
     </div>
     ${h.conceptText ? `<div class="hint-item"><div class="hint-level l1">Concept Explanation</div><div class="hint-text">${h.conceptText}</div></div>` : ''}
   </div>`;
@@ -688,7 +1116,7 @@ function TestSetupPage() {
   const allKcs = subjects.filter(s => selSubs.includes(s.id)).flatMap(s => s.chapters).flatMap(c => c.kcs);
   const selKcs = S.testSetup?.conceptIds || [];
   return `
-    <header class="page-header"><div><h1 class="greeting" style="font-size:1.35rem">Test Mode</h1><p class="greeting-sub">Simulate exam conditions — no AI, no hints</p></div></header>
+    <header class="page-header"><div><h1 class="greeting" id="page-title-mx" style="font-size:1.35rem">Test Mode</h1><p class="greeting-sub">Simulate exam conditions — no AI, no hints</p></div></header>
     <div class="test-setup">
       <div class="goal-form">
         <div class="form-row">
@@ -786,13 +1214,21 @@ function TestActivePage() {
 
 function TestResultsPage() {
   const t = S.test;
-  let correct = 0, attempted = 0;
-  t.qs.forEach(q => { if (t.ans[q.id] !== undefined) { attempted++; if (t.ans[q.id] === q.correct) correct++; } });
+  let correct = 0, attempted = 0, wrong = 0;
+  t.qs.forEach(q => { 
+    if (t.ans[q.id] !== undefined) { 
+      attempted++; 
+      if (t.ans[q.id] === q.correct) correct++; 
+      else wrong++;
+    } 
+  });
+  const jeeScore = (correct * 4) - (wrong * 1);
+  const maxScore = t.qs.length * 4;
   const pct = attempted > 0 ? Math.round(correct / attempted * 100) : 0;
   return `
-    <header class="page-header"><div><h1 class="greeting" style="font-size:1.35rem">Test Results</h1><p class="greeting-sub">Here's how you did</p></div></header>
+    <header class="page-header"><div><h1 class="greeting" id="page-title-mx" style="font-size:1.35rem">Test Results</h1><p class="greeting-sub">Here's how you did</p></div></header>
     <div class="mastery-overview">
-      <div class="mastery-card"><h4>Score</h4><div class="big-num ${pct >= 70 ? 'text-green' : pct >= 40 ? 'text-amber' : 'text-red'}">${correct}/${t.qs.length}</div></div>
+      <div class="mastery-card"><h4>JEE Score</h4><div class="big-num ${jeeScore > maxScore * 0.7 ? 'text-green' : jeeScore > maxScore * 0.4 ? 'text-amber' : 'text-red'}">${jeeScore}/${maxScore}</div></div>
       <div class="mastery-card"><h4>Accuracy</h4><div class="big-num">${pct}%</div></div>
       <div class="mastery-card"><h4>Attempted</h4><div class="big-num">${attempted}/${t.qs.length}</div></div>
     </div>
@@ -811,7 +1247,7 @@ function TestResultsPage() {
 // ════════════════════════════════════════════════════════════
 function NotesPage() {
   if (!S.notesList.length) {
-    return `<header class="page-header"><div><h1 class="greeting" style="font-size:1.35rem">Notes</h1><p class="greeting-sub">Your saved question notes</p></div></header>
+    return `<header class="page-header"><div><h1 class="greeting" id="page-title-mx" style="font-size:1.35rem">Notes</h1><p class="greeting-sub">Your saved question notes</p></div></header>
             <div class="empty-state"><i data-lucide="sticky-note"></i><h3>No notes yet</h3><p>Save notes while practicing</p></div>`;
   }
 
@@ -825,7 +1261,7 @@ function NotesPage() {
   });
 
   return `
-    <header class="page-header"><div><h1 class="greeting" style="font-size:1.35rem">Notes</h1><p class="greeting-sub">Your saved question notes</p></div>
+    <header class="page-header"><div><h1 class="greeting" id="page-title-mx" style="font-size:1.35rem">Notes</h1><p class="greeting-sub">Your saved question notes</p></div>
     <div class="header-actions"><button class="btn-pill" id="print-notes"><i data-lucide="printer"></i>Print</button></div></header>
     <div class="notes-container" style="display:flex;flex-direction:column;gap:1.5rem">
       ${Object.entries(grouped).map(([subId, kcs]) => {
@@ -896,7 +1332,7 @@ function LeaderboardPage() {
   const initials = userName.split(' ').map(w => w[0]).join('').substring(0, 2).toUpperCase();
   
   return `
-    <header class="page-header"><div><h1 class="greeting" style="font-size:1.35rem">Leaderboard</h1><p class="greeting-sub">See how you compare</p></div></header>
+    <header class="page-header"><div><h1 class="greeting" id="page-title-mx" style="font-size:1.35rem">Leaderboard</h1><p class="greeting-sub">See how you compare</p></div></header>
     <div class="filter-bar"><button class="filter-chip active">All Time</button><button class="filter-chip">This Week</button><button class="filter-chip">Today</button></div>
     <table class="lb-table"><thead><tr><th>#</th><th>Student</th><th>XP</th><th>Questions</th><th>Accuracy</th></tr></thead><tbody>
       <tr class="you"><td class="rank-cell gold">1</td><td><div class="user-cell"><img src="${S.user?.photoURL || ''}" alt="" style="width:28px;height:28px;border-radius:50%;border:2px solid var(--accent);" onerror="this.style.display='none';this.nextSibling.style.display='flex'"><div class="user-avatar" style="background:var(--accent);display:none">${initials}</div><span class="user-name">${userName}<span class="you-badge">You</span></span></div></td><td class="font-mono" style="font-size:.82rem">${S.xp}</td><td>${totalQ}</td><td class="acc-cell ${acc>=80?'high':acc>=60?'med':'low'}">${acc}%</td></tr>
@@ -954,7 +1390,7 @@ function GoalCard(g) {
 
 function DoubtsPage() {
   return `
-    <header class="page-header"><div><h1 class="greeting" style="font-size:1.35rem">Doubts & Questions</h1><p class="greeting-sub">Get help on specific topics</p></div></header>
+    <header class="page-header"><div><h1 class="greeting" id="page-title-mx" style="font-size:1.35rem">Doubts & Questions</h1><p class="greeting-sub">Get help on specific topics</p></div></header>
     <div class="doubts-form" style="background:var(--bg-surface);padding:1.5rem;border-radius:var(--radius-lg);border:1px solid var(--border);margin-bottom:2rem">
       <div class="form-group"><label class="form-label">Subject</label><select class="form-select" id="doubt-sub">${subjects.map(s=>`<option value="${s.id}">${s.name}</option>`).join('')}</select></div>
       <div class="form-group" style="margin-top:1rem"><label class="form-label">Your Doubt</label><textarea class="form-input" id="doubt-text" rows="3" placeholder="Describe what you're stuck on..."></textarea></div>
@@ -991,7 +1427,7 @@ function MasteryPage() {
   return `
     <header class="page-header">
       <div>
-        <h1 class="greeting" style="font-size:1.35rem">Mastery Overview</h1>
+        <h1 class="greeting" id="page-title-mx" style="font-size:1.35rem">Mastery Overview</h1>
         <p class="greeting-sub">Track your progress and subject proficiency in real-time</p>
       </div>
     </header>
@@ -1143,7 +1579,7 @@ function checkSpeed(questionId) {
 // ════════════════════════════════════════════════════════════
 function SettingsPage() {
   return `
-    <header class="page-header"><div><h1 class="greeting" style="font-size:1.35rem">Settings</h1><p class="greeting-sub">Customize your experience</p></div></header>
+    <header class="page-header"><div><h1 class="greeting" id="page-title-mx" style="font-size:1.35rem">Settings</h1><p class="greeting-sub">Customize your experience</p></div></header>
     <div class="settings-grid">
       <div class="goal-form">
         <div class="section-title">Appearance</div>
@@ -1283,6 +1719,37 @@ function toast(msg, type = 'info') {
 
 // ─── EVENT BINDING ──────────────────────────────────────────
 function bind() {
+  // ── Page animations (fires on every page change) ─────────────
+  requestAnimationFrame(() => {
+    // Dashboard: beams canvas + greeting matrix
+    if (S.page === 'home') {
+      initHomeAnimations();
+    }
+    // All other pages: matrix flip on the page title
+    const titleEl = document.getElementById('page-title-mx');
+    if (titleEl && S.page !== 'home') {
+      const text = titleEl.textContent.trim();
+      startMatrixFlip(titleEl, text, { holdTime: 650, resolveInterval: 45, flickerRate: 80 });
+    }
+  });
+
+  // ── Sidebar nav label hover — sequential matrix flip ───────
+  document.querySelectorAll('.nav-item .nav-label').forEach(label => {
+    const originalText = label.textContent;
+    label.addEventListener('mouseenter', () => {
+      if (label.dataset.animating === '1') return;
+      label.dataset.animating = '1';
+      startMatrixFlipSequential(label, originalText, {
+        letterDuration: 350,
+        letterInterval: 75,
+        initialDelay: 0,
+      });
+      // Clear flag after animation finishes
+      const totalDur = originalText.length * 75 + 350 + 80;
+      setTimeout(() => { label.dataset.animating = '0'; }, totalDur);
+    });
+  });
+
   // Nav
   document.querySelectorAll('[data-nav]').forEach(el => el.addEventListener('click', () => {
     go(el.dataset.nav);
@@ -1310,6 +1777,59 @@ function bind() {
   document.getElementById('btn-save-q-main')?.addEventListener('click', saveCurrentQuestionToNotes);
   document.getElementById('btn-quick-save-q')?.addEventListener('click', saveCurrentQuestionToNotes);
 
+  // Retry similar question
+  document.querySelector('[data-action="retry"]')?.addEventListener('click', async () => {
+    const qs = getQuestions(S.kc); const q = qs[S.qIdx];
+    
+    // Switch the button to a loading state
+    const btn = document.querySelector('[data-action="retry"]');
+    if (btn) btn.innerHTML = `<div class="spinner"></div> Generating...`;
+    
+    toast('Generating similar question...', 'info');
+    const raw = await generateSimilarQuestion(q.text);
+    // Parse the response robustly
+    try {
+      // Remove any markdown code blocks
+      const cleanedRaw = raw.replace(/```[a-z]*\n?/gi, '').replace(/```/g, '');
+      const lines = cleanedRaw.split('\n').filter(l => l.trim());
+      let text = '', opts = [], correct = 0;
+      
+      lines.forEach(l => {
+        const cleanL = l.replace(/\*\*/g, '').trim(); // remove bold stars
+        const u = cleanL.toUpperCase();
+        
+        // Match A), A., (A), 1), 1., (1)
+        const optMatch = cleanL.match(/^[\(]?([A-D1-4])[\.\)][\s]+(.*)/i);
+        if (optMatch) {
+          opts.push(optMatch[2].trim());
+        }
+        else if (u.startsWith('CORRECT:')) {
+          let ansChar = u.replace('CORRECT:', '').trim().charAt(0);
+          if (['1','2','3','4'].includes(ansChar)) {
+             correct = parseInt(ansChar) - 1;
+          } else {
+             correct = ['A','B','C','D'].indexOf(ansChar);
+          }
+          if (correct === -1) correct = 0;
+        }
+        else if (u.startsWith('QUESTION:')) {
+          text += cleanL.substring(cleanL.toUpperCase().indexOf('QUESTION:') + 9).trim() + '\n';
+        }
+        else {
+          text += cleanL + '\n';
+        }
+      });
+      
+      if (opts.length < 2) throw new Error("Not enough options parsed. Raw:\n" + raw);
+      S.retryQ = { text: text.trim(), options: opts, correct, sel: null, submitted: false };
+      render(); renderMath();
+    } catch (e) {
+      console.error("AI Parse Error:", e, "\nRaw response:", raw);
+      if (btn) btn.innerHTML = `<i data-lucide="refresh-cw"></i>Try Similar Question`;
+      toast('Failed to generate. Try again.', 'error');
+    }
+  });
+
   // Subject cards
   document.querySelectorAll('[data-subject]').forEach(el => el.addEventListener('click', () => go('subject', { subject: el.dataset.subject })));
 
@@ -1336,6 +1856,22 @@ function bind() {
   document.getElementById('btn-submit')?.addEventListener('click', () => {
     if (S.selected === null) return;
     const qs = getQuestions(S.kc); const q = qs[S.qIdx];
+    
+    // Handle Retry Question Submit
+    if (S.retryQ) {
+      S.retryQ.sel = S.selected;
+      S.retryQ.submitted = true;
+      const ok = S.selected === S.retryQ.correct;
+      if (ok) {
+        toast('Correct on the similar question!', 'success');
+      } else {
+        toast('Still not quite right. Review the hints again!', 'error');
+      }
+      render(); renderMath();
+      return;
+    }
+
+    // Handle Normal Question Submit
     checkSpeed(q.id);
     if (!S.answers[q.id]) S.answers[q.id] = { wrongAttempts: [], time: S.timerSec };
     if (!S.answers[q.id].wrongAttempts) S.answers[q.id].wrongAttempts = [];
@@ -1367,6 +1903,7 @@ function bind() {
 
   // Next
   document.getElementById('btn-next')?.addEventListener('click', () => {
+    if (S.retryQ) { S.retryQ = null; render(); return; } // Clear retry question, return to original
     const qs = getQuestions(S.kc);
     if (S.qIdx < qs.length - 1) { S.qIdx++; S.selected = null; S.retryQ = null; S.qStartTime = Date.now(); render(); }
     else { toast('KC Complete!', 'success'); go('subject', { subject: S.subject }); }
@@ -1376,6 +1913,13 @@ function bind() {
   document.getElementById('btn-skip')?.addEventListener('click', () => {
     const qs = getQuestions(S.kc);
     if (S.qIdx < qs.length - 1) { S.qIdx++; S.selected = null; S.retryQ = null; S.qStartTime = Date.now(); render(); }
+  });
+  
+  // Skip Retry
+  document.getElementById('btn-skip-retry')?.addEventListener('click', () => {
+    S.retryQ = null;
+    S.selected = null;
+    render();
   });
 
   // Dots
@@ -1398,33 +1942,6 @@ function bind() {
     h.conceptText = txt; h.loading = false; render(); renderMath();
   });
 
-  document.querySelector('[data-action="tryagain"]')?.addEventListener('click', () => {
-    const qs = getQuestions(S.kc); const q = qs[S.qIdx];
-    delete S.answers[q.id]; S.selected = null; render();
-  });
-
-  // Retry similar question
-  document.querySelector('[data-action="retry"]')?.addEventListener('click', async () => {
-    const qs = getQuestions(S.kc); const q = qs[S.qIdx];
-    toast('Generating similar question...', 'info');
-    const raw = await generateSimilarQuestion(q.text);
-    // Parse the response
-    try {
-      const lines = raw.split('\n').filter(l => l.trim());
-      let text = '', opts = [], correct = 0;
-      lines.forEach(l => {
-        if (l.startsWith('QUESTION:')) text = l.replace('QUESTION:', '').trim();
-        else if (l.match(/^[A-D]\)/)) opts.push(l.substring(2).trim());
-        else if (l.startsWith('CORRECT:')) { const c = l.replace('CORRECT:','').trim(); correct = 'ABCD'.indexOf(c.charAt(0)); }
-        else if (!text) text += l + ' ';
-      });
-      if (!text) text = raw; // fallback
-      if (opts.length < 4) opts = ['Option A', 'Option B', 'Option C', 'Option D'];
-      S.retryQ = { text, options: opts, correct: Math.max(0, correct), submitted: false, sel: null };
-    } catch { S.retryQ = { text: raw, options: ['A', 'B', 'C', 'D'], correct: 0, submitted: false, sel: null }; }
-    S.selected = null;
-    render(); renderMath();
-  });
 
   // Retry option select
   document.querySelectorAll('[data-retry-opt]').forEach(el => el.addEventListener('click', () => {
