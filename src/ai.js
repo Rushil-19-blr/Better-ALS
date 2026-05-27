@@ -60,3 +60,45 @@ export async function answerDoubt(doubtText) {
     `You are a JEE tutor answering a general student doubt (not tied to a specific platform question). Explain clearly with examples. Use LaTeX \\( \\) for math. Be helpful and thorough but concise.\n\nStudent's doubt: ${doubtText}`
   );
 }
+
+// ── Sidecar: Multimodal Image Analysis ───────────────────────
+export async function analyzeWorkingImage(imageBase64, mimeType, userQuestion, context = '') {
+  try {
+    const systemPrompt = `You are a JEE tutor. A student has photographed their handwritten working. ${context ? `Context: they are studying "${context}".` : ''}
+
+Rules:
+- Carefully examine the handwritten steps in the image
+- Identify exactly where they went wrong (if any errors)
+- Explain the correct approach step-by-step
+- Use **bold** for key terms
+- Use LaTeX \\( \\) for inline math, \\[ \\] for display math
+- Be encouraging but precise about mistakes
+- If you can't read the handwriting clearly, say so and ask them to retake
+
+Student's question: ${userQuestion || "Where did I go wrong? Help me understand my mistake."}`;
+
+    const res = await fetch(API_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{
+          role: 'user',
+          parts: [
+            { inlineData: { mimeType: mimeType || 'image/jpeg', data: imageBase64 } },
+            { text: systemPrompt }
+          ]
+        }],
+        generationConfig: { temperature: 0.7, maxOutputTokens: 2048 },
+      }),
+    });
+    const data = await res.json();
+    if (data.candidates?.[0]?.content?.parts?.[0]?.text) {
+      return data.candidates[0].content.parts[0].text;
+    }
+    return 'I could not analyze the image right now. Please try again or retake the photo with better lighting.';
+  } catch (err) {
+    console.error('Gemini Vision API error:', err);
+    return 'Connection error — please check your internet and try again.';
+  }
+}
+
