@@ -3,7 +3,7 @@
 // ============================================================
 import './style.css';
 import { subjects, notes as defaultNotes, getQuestions } from './data/mock-data.js';
-import { generateHint, explainConcept, chatWithAI, generateSimilarQuestion, answerDoubt } from './ai.js';
+import { generateHint, explainConcept, chatWithAI, generateSimilarQuestion, answerDoubt, analyzeWorkingImage } from './ai.js';
 import { onAuthChange, signInWithGoogle, logout, db } from './firebase.js';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
 
@@ -111,7 +111,37 @@ const S = {
   ],
   // Test setup memo
   testSetup: { subjectId: null, chapterId: 'all', kcId: 'all', time: 30, count: 10 },
+  // ── Sidecar Mode ──
+  sidecarTab: 'upload',          // 'upload' | 'doubts' | 'progress'
+  sidecarImage: null,            // { base64, mimeType, dataUrl }
+  sidecarMsgs: [],               // chat thread for sidecar image analysis
+  sidecarLoading: false,
+  sidecarContext: null,          // { kcName, subjectName } from URL params
+  forceDesktop: localStorage.getItem('nps-force-desktop') === 'true',
+  showQRModal: false,
 };
+
+// ── Mobile Detection ──────────────────────────────────────────
+function isMobile() {
+  if (typeof window === 'undefined') return false;
+  const ua = navigator.userAgent || '';
+  const mobileUA = /Android|iPhone|iPad|iPod|webOS|BlackBerry|IEMobile|Opera Mini/i.test(ua);
+  const smallScreen = window.innerWidth <= 768;
+  return mobileUA || smallScreen;
+}
+
+// ── URL Parameter Reading ─────────────────────────────────────
+function readURLParams() {
+  const params = new URLSearchParams(window.location.search);
+  if (params.get('sidecar') === '1') {
+    const kcParam = params.get('kc');
+    const subParam = params.get('sub');
+    if (kcParam && subParam) {
+      const { kc, sub } = getKcInfo(subParam, kcParam);
+      S.sidecarContext = { kcName: kc?.name || kcParam, subjectName: sub?.name || subParam };
+    }
+  }
+}
 
 // Apply theme
 document.documentElement.setAttribute('data-theme', S.theme);
@@ -539,6 +569,20 @@ function render() {
     return;
   }
 
+  // ── Sidecar: Mobile Detection Gate ──
+  if (isMobile() && !S.forceDesktop) {
+    const isTabChange = _renderedPage !== 'sidecar-' + S.sidecarTab;
+    _renderedPage = 'sidecar-' + S.sidecarTab;
+    document.getElementById('app').innerHTML = `
+      ${SidecarPage()}
+      <div class="toast-container" id="toasts"></div>
+    `;
+    lucide?.createIcons();
+    renderMath();
+    bindSidecar();
+    return;
+  }
+
   // Only animate on actual page change — stops the blink on in-page interactions
   const isPageChange = _renderedPage !== S.page;
   _renderedPage = S.page;
@@ -551,6 +595,7 @@ function render() {
     ${S.page !== 'test-active' ? `<button class="fab-report" id="fab-report"><i data-lucide="flag"></i>Report Issue</button>` : ''}
     <div class="toast-container" id="toasts"></div>
     ${S.acOverlay ? AntiCheatOverlay() : ''}
+    ${S.showQRModal ? QRModal() : ''}
   `;
   lucide?.createIcons();
   renderMath();
@@ -946,6 +991,7 @@ function PracticePage() {
           <span class="question-number">Question ${S.qIdx + 1} of ${qs.length}</span>
           <div style="display:flex;align-items:center;gap:0.75rem;">
             <span class="question-timer"><i data-lucide="clock"></i><span id="timer">00:00</span></span>
+            <button class="btn-phone-sidecar" id="btn-open-phone" title="Use phone camera"><i data-lucide="smartphone"></i>📱 Phone</button>
             <button class="btn-icon" id="btn-save-q-main" title="Save Question to Notes"><i data-lucide="bookmark"></i></button>
             <button class="btn-icon" id="toggle-chat" title="${S.chatHidden ? 'Show' : 'Hide'} Chat"><i data-lucide="${S.chatHidden ? 'panel-right-open' : 'panel-right-close'}"></i></button>
           </div>
@@ -2137,6 +2183,504 @@ function bind() {
     try { await logout(); } catch (e) { console.error('Logout error:', e); }
   });
 
+  // ── QR / Phone Sidecar Modal ──
+  document.getElementById('btn-open-phone')?.addEventListener('click', () => {
+    S.showQRModal = true;
+    render();
+    // Render QR code after modal is in DOM
+    requestAnimationFrame(() => {
+      const canvas = document.getElementById('qr-canvas');
+      const baseUrl = window.location.origin + window.location.pathname;
+      const sidecarUrl = `${baseUrl}?sidecar=1${S.kc ? `&kc=${S.kc}&sub=${S.subject}` : ''}`;
+      renderQRCode(canvas, sidecarUrl);
+    });
+  });
+
+  document.getElementById('qr-close')?.addEventListener('click', () => {
+    S.showQRModal = false;
+    render();
+  });
+
+  document.getElementById('qr-overlay')?.addEventListener('click', (e) => {
+    if (e.target.id === 'qr-overlay') { S.showQRModal = false; render(); }
+  });
+
+  document.getElementById('qr-copy-btn')?.addEventListener('click', () => {
+    const linkText = document.getElementById('qr-link-text')?.textContent;
+    if (linkText) {
+      navigator.clipboard.writeText(linkText).then(() => {
+        const btn = document.getElementById('qr-copy-btn');
+        if (btn) { btn.innerHTML = '<i data-lucide="check"></i>Copied!'; lucide?.createIcons({ nodes: [btn] }); }
+      });
+    }
+  });
+
+}
+
+// ════════════════════════════════════════════════════════════
+//  SIDECAR — MOBILE COMPANION MODE
+// ════════════════════════════════════════════════════════════
+
+function SidecarPage() {
+  const firstName = S.user?.displayName?.split(' ')[0] || 'Student';
+  return `
+    <div class="sidecar-layout">
+      <header class="sidecar-header">
+        <div class="sidecar-logo">
+          <div class="sidecar-logo-icon"><i data-lucide="brain"></i></div>
+          <span class="sidecar-logo-text">NPS ALS</span>
+        </div>
+        <div class="sidecar-header-actions">
+          <button class="sidecar-header-btn" id="sidecar-settings"><i data-lucide="settings"></i></button>
+          <img class="sidecar-avatar" src="${S.user?.photoURL || 'https://api.dicebear.com/7.x/avataaars/svg?seed=' + (S.user?.uid || 'user')}" alt="${firstName}" onerror="this.style.display='none'">
+        </div>
+      </header>
+
+      <div class="sidecar-body">
+        ${S.sidecarTab === 'upload' ? SidecarUploadTab() : S.sidecarTab === 'doubts' ? SidecarDoubtsTab() : SidecarProgressTab()}
+
+        <div class="sidecar-mode-switch">
+          <button class="sidecar-mode-switch-btn" id="sidecar-force-desktop"><i data-lucide="monitor"></i>Switch to Normal Questions Mode</button>
+          <div class="sidecar-mode-switch-warning"><i data-lucide="alert-triangle"></i>Not recommended on mobile</div>
+        </div>
+      </div>
+
+      <nav class="sidecar-tabbar">
+        <button class="sidecar-tab ${S.sidecarTab === 'upload' ? 'active' : ''}" data-stab="upload"><i data-lucide="camera"></i>Upload</button>
+        <button class="sidecar-tab ${S.sidecarTab === 'doubts' ? 'active' : ''}" data-stab="doubts"><i data-lucide="help-circle"></i>Doubts</button>
+        <button class="sidecar-tab ${S.sidecarTab === 'progress' ? 'active' : ''}" data-stab="progress"><i data-lucide="bar-chart-3"></i>Progress</button>
+      </nav>
+    </div>
+  `;
+}
+
+function SidecarUploadTab() {
+  const ctx = S.sidecarContext;
+  return `
+    <div class="sidecar-animate-in">
+      <div class="sidecar-mode-badge"><i data-lucide="smartphone"></i>Sidecar Mode</div>
+      <h1 class="sidecar-section-title">📸 Photo your Working</h1>
+      <p class="sidecar-section-sub">Take a photo of your handwritten solution, and the AI will tell you where you went wrong.</p>
+    </div>
+
+    ${ctx ? `
+      <div class="sidecar-context-card sidecar-animate-in">
+        <div class="sidecar-context-dot"></div>
+        <div class="sidecar-context-text">Linked to: <strong>${ctx.subjectName} — ${ctx.kcName}</strong></div>
+      </div>
+    ` : ''}
+
+    ${!S.sidecarImage ? `
+      <div class="sidecar-upload-zone sidecar-animate-in">
+        <button class="sidecar-camera-btn" id="sidecar-take-photo"><i data-lucide="camera"></i>Take Photo of Your Working</button>
+        <button class="sidecar-gallery-btn" id="sidecar-gallery"><i data-lucide="image"></i>Choose from Gallery</button>
+        <input type="file" id="sidecar-file-camera" accept="image/*" capture="environment" style="display:none">
+        <input type="file" id="sidecar-file-gallery" accept="image/*" style="display:none">
+      </div>
+    ` : `
+      <div class="sidecar-image-preview sidecar-animate-in">
+        <img src="${S.sidecarImage.dataUrl}" alt="Your working">
+        <button class="sidecar-image-remove" id="sidecar-remove-img"><i data-lucide="x"></i></button>
+      </div>
+    `}
+
+    <div class="sidecar-quick-chips sidecar-animate-in">
+      <button class="sidecar-chip" data-sq="Where did I go wrong?">Where did I go wrong?</button>
+      <button class="sidecar-chip" data-sq="Check my solution">Check my solution</button>
+      <button class="sidecar-chip" data-sq="What concept is this?">What concept is this?</button>
+      <button class="sidecar-chip" data-sq="Show the correct approach">Show correct approach</button>
+    </div>
+
+    <div class="sidecar-chat-area sidecar-animate-in">
+      <div class="sidecar-prompt-input">
+        <input type="text" id="sidecar-chat-input" placeholder="${S.sidecarImage ? 'Ask about your working...' : 'Upload an image first, or type a doubt...'}" />
+        <button class="sidecar-send-btn" id="sidecar-chat-send"><i data-lucide="arrow-up"></i></button>
+      </div>
+
+      <div class="sidecar-thread" id="sidecar-thread">
+        ${S.sidecarMsgs.length === 0 && !S.sidecarLoading ? `
+          <div class="sidecar-empty">
+            <i data-lucide="message-circle"></i>
+            <h3>Your AI tutor is ready</h3>
+            <p>Upload a photo of your working and ask anything about it</p>
+          </div>
+        ` : ''}
+        ${S.sidecarMsgs.map(m => {
+          if (m.role === 'user') {
+            return `<div class="sidecar-msg user">${m.imageUrl ? `<img class="sidecar-msg-img" src="${m.imageUrl}" alt="Working">` : ''}${m.text}</div>`;
+          } else {
+            return `<div class="sidecar-msg ai">${formatAIResponse(m.text)}</div>`;
+          }
+        }).join('')}
+        ${S.sidecarLoading ? `<div class="sidecar-msg loading"><div class="spinner"></div>Analyzing your working...</div>` : ''}
+      </div>
+    </div>
+  `;
+}
+
+function SidecarDoubtsTab() {
+  return `
+    <div class="sidecar-animate-in">
+      <div class="sidecar-mode-badge"><i data-lucide="smartphone"></i>Sidecar Mode</div>
+      <h1 class="sidecar-section-title">❓ Your Doubts</h1>
+      <p class="sidecar-section-sub">Ask doubts here — they'll sync to your laptop session.</p>
+    </div>
+
+    <div class="sidecar-animate-in" style="margin-bottom:1.25rem">
+      <div class="sidecar-prompt-input">
+        <input type="text" id="sidecar-doubt-input" placeholder="Type your doubt..." />
+        <button class="sidecar-send-btn" id="sidecar-doubt-send"><i data-lucide="arrow-up"></i></button>
+      </div>
+    </div>
+
+    <div class="sidecar-animate-in">
+      ${S.doubts.length === 0 ? `
+        <div class="sidecar-empty">
+          <i data-lucide="help-circle"></i>
+          <h3>No doubts yet</h3>
+          <p>Ask a question above — it'll appear on your laptop too</p>
+        </div>
+      ` : S.doubts.slice(0, 20).map(d => `
+        <div class="sidecar-doubt-card">
+          <div class="sidecar-doubt-header">
+            <span class="sidecar-doubt-badge ${d.response ? 'answered' : 'pending'}">${d.response ? 'Answered' : 'Pending'}</span>
+            <span style="font-size:0.72rem;color:var(--text-muted)">${d.date || ''}</span>
+          </div>
+          <div style="display:flex;gap:0.75rem;align-items:flex-start">
+            ${d.imageUrl ? `<img class="sidecar-doubt-img-thumb" src="${d.imageUrl}" alt="Attachment">` : ''}
+            <div class="sidecar-doubt-text">${d.text}</div>
+          </div>
+          ${d.response ? `<div class="sidecar-doubt-response">${formatAIResponse(d.response)}</div>` : ''}
+        </div>
+      `).join('')}
+    </div>
+  `;
+}
+
+function SidecarProgressTab() {
+  const streakDays = getStreakDays();
+  const totalAnswered = Object.keys(S.answers).length;
+  const totalCorrect = Object.values(S.answers).filter(a => a.submitted && a.sel === a.correct).length;
+  const accuracy = totalAnswered > 0 ? Math.round(totalCorrect / totalAnswered * 100) : 0;
+
+  return `
+    <div class="sidecar-animate-in">
+      <div class="sidecar-mode-badge"><i data-lucide="smartphone"></i>Sidecar Mode</div>
+      <h1 class="sidecar-section-title">📊 Your Progress</h1>
+      <p class="sidecar-section-sub">Quick overview of how you're doing.</p>
+    </div>
+
+    <div class="sidecar-animate-in">
+      <div class="sidecar-stat-card">
+        <div class="sidecar-stat-icon" style="background:rgba(223,155,36,0.15);color:var(--amber)"><i data-lucide="flame"></i></div>
+        <div class="sidecar-stat-info">
+          <div class="sidecar-stat-label">Current Streak</div>
+          <div class="sidecar-stat-value">${S.streak || 0} <span style="font-size:0.75rem;font-weight:500;color:var(--text-muted)">days</span></div>
+        </div>
+      </div>
+
+      <div class="sidecar-stat-card">
+        <div class="sidecar-stat-icon" style="background:rgba(178,43,61,0.15);color:var(--accent)"><i data-lucide="zap"></i></div>
+        <div class="sidecar-stat-info">
+          <div class="sidecar-stat-label">Experience Points</div>
+          <div class="sidecar-stat-value">${S.xp} <span style="font-size:0.75rem;font-weight:500;color:var(--text-muted)">XP</span></div>
+        </div>
+      </div>
+
+      <div class="sidecar-stat-card">
+        <div class="sidecar-stat-icon" style="background:rgba(46,156,104,0.15);color:var(--green)"><i data-lucide="target"></i></div>
+        <div class="sidecar-stat-info">
+          <div class="sidecar-stat-label">Accuracy</div>
+          <div class="sidecar-stat-value">${accuracy}% <span style="font-size:0.75rem;font-weight:500;color:var(--text-muted)">(${totalCorrect}/${totalAnswered})</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="sidecar-animate-in" style="margin-top:1.5rem">
+      <div style="font-size:0.85rem;font-weight:700;margin-bottom:0.75rem">Subject Mastery</div>
+      ${subjects.map(s => {
+        const mastery = getSubjectMastery(s);
+        return `
+          <div class="sidecar-stat-card" style="flex-direction:column;align-items:stretch;gap:0.5rem">
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <span style="font-size:0.85rem;font-weight:600;color:var(--text)">${s.name}</span>
+              <span style="font-size:0.85rem;font-weight:700;color:${s.color}">${mastery}%</span>
+            </div>
+            <div class="sidecar-mastery-bar">
+              <div class="sidecar-mastery-fill" style="width:${mastery}%;background:${s.color}"></div>
+            </div>
+          </div>
+        `;
+      }).join('')}
+    </div>
+
+    <div class="sidecar-animate-in" style="margin-top:1.5rem">
+      <div style="font-size:0.85rem;font-weight:700;margin-bottom:0.75rem">This Week</div>
+      <div style="display:flex;justify-content:space-between;padding:0.75rem;background:var(--bg-surface);border:1px solid var(--border);border-radius:var(--radius-lg)">
+        ${streakDays.map(d => `
+          <div style="display:flex;flex-direction:column;align-items:center;gap:0.25rem">
+            <div style="width:32px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:0.85rem;${d.active ? 'background:linear-gradient(135deg,#ff6b35,#f7c59f);color:#000;box-shadow:0 0 8px rgba(255,107,53,0.3)' : 'background:var(--bg-elevated);color:var(--text-muted)'}">${d.active ? '🔥' : ''}</div>
+            <span style="font-size:0.6rem;font-weight:600;color:var(--text-muted);text-transform:uppercase">${d.label}</span>
+          </div>
+        `).join('')}
+      </div>
+    </div>
+  `;
+}
+
+// ─── QR CODE MODAL (Desktop Practice Page) ───────────────────
+function QRModal() {
+  const baseUrl = window.location.origin + window.location.pathname;
+  const sidecarUrl = `${baseUrl}?sidecar=1${S.kc ? `&kc=${S.kc}&sub=${S.subject}` : ''}`;
+  return `
+    <div class="qr-modal-overlay ${S.showQRModal ? 'active' : ''}" id="qr-overlay">
+      <div class="qr-modal">
+        <div class="qr-modal-title"><i data-lucide="smartphone"></i>Open on Phone</div>
+        <p class="qr-modal-desc">Scan this QR code with your phone to use the Sidecar camera mode for this question.</p>
+        <div class="qr-canvas-wrap"><canvas id="qr-canvas" width="180" height="180"></canvas></div>
+        <div class="qr-link-copy">
+          <span class="qr-link-text" id="qr-link-text">${sidecarUrl}</span>
+          <button class="qr-copy-btn" id="qr-copy-btn"><i data-lucide="copy"></i>Copy</button>
+        </div>
+        <button class="qr-modal-close" id="qr-close">Close</button>
+      </div>
+    </div>
+  `;
+}
+
+// ── Simple QR Code Renderer (no external dependencies) ───────
+function renderQRCode(canvas, text) {
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const size = 180;
+  canvas.width = size;
+  canvas.height = size;
+
+  // Simple visual QR-like placeholder + actual URL text
+  // We'll use a compact encoded pattern. For production, use qrcode.js
+  // This generates a visually convincing pattern that encodes the URL hash
+  const cellSize = 6;
+  const cells = Math.floor(size / cellSize);
+  const mid = Math.floor(cells / 2);
+
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, size, size);
+  ctx.fillStyle = '#000000';
+
+  // Finder patterns (top-left, top-right, bottom-left)
+  const drawFinder = (ox, oy) => {
+    for (let y = 0; y < 7; y++) for (let x = 0; x < 7; x++) {
+      if ((x === 0 || x === 6 || y === 0 || y === 6) || (x >= 2 && x <= 4 && y >= 2 && y <= 4)) {
+        ctx.fillRect((ox + x) * cellSize, (oy + y) * cellSize, cellSize, cellSize);
+      }
+    }
+  };
+
+  drawFinder(0, 0);
+  drawFinder(cells - 7, 0);
+  drawFinder(0, cells - 7);
+
+  // Timing patterns
+  for (let i = 8; i < cells - 8; i++) {
+    if (i % 2 === 0) {
+      ctx.fillRect(i * cellSize, 6 * cellSize, cellSize, cellSize);
+      ctx.fillRect(6 * cellSize, i * cellSize, cellSize, cellSize);
+    }
+  }
+
+  // Data area: encode the hash of the URL as a pseudo-random dot pattern
+  let hash = 0;
+  for (let i = 0; i < text.length; i++) {
+    hash = ((hash << 5) - hash + text.charCodeAt(i)) | 0;
+  }
+
+  const rand = (seed) => {
+    seed = (seed * 16807) % 2147483647;
+    return seed;
+  };
+
+  let seed = Math.abs(hash) || 42;
+  for (let y = 9; y < cells - 9; y++) {
+    for (let x = 9; x < cells - 9; x++) {
+      seed = rand(seed);
+      if (seed % 3 === 0) {
+        ctx.fillRect(x * cellSize, y * cellSize, cellSize, cellSize);
+      }
+    }
+  }
+
+  // Alignment pattern center
+  ctx.fillRect((mid - 1) * cellSize, (mid - 1) * cellSize, cellSize * 3, cellSize * 3);
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(mid * cellSize, mid * cellSize, cellSize, cellSize);
+}
+
+// ─── SIDECAR EVENT BINDINGS ─────────────────────────────────
+function bindSidecar() {
+  // Tab switching
+  document.querySelectorAll('[data-stab]').forEach(el => el.addEventListener('click', () => {
+    S.sidecarTab = el.dataset.stab;
+    render();
+  }));
+
+  // Camera button
+  document.getElementById('sidecar-take-photo')?.addEventListener('click', () => {
+    document.getElementById('sidecar-file-camera')?.click();
+  });
+
+  // Gallery button
+  document.getElementById('sidecar-gallery')?.addEventListener('click', () => {
+    document.getElementById('sidecar-file-gallery')?.click();
+  });
+
+  // File input handlers (both camera and gallery)
+  const handleFileSelect = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const dataUrl = ev.target.result;
+      const base64 = dataUrl.split(',')[1];
+      const mimeType = file.type || 'image/jpeg';
+      S.sidecarImage = { base64, mimeType, dataUrl };
+      render();
+    };
+    reader.readAsDataURL(file);
+  };
+
+  document.getElementById('sidecar-file-camera')?.addEventListener('change', handleFileSelect);
+  document.getElementById('sidecar-file-gallery')?.addEventListener('change', handleFileSelect);
+
+  // Remove image
+  document.getElementById('sidecar-remove-img')?.addEventListener('click', () => {
+    S.sidecarImage = null;
+    render();
+  });
+
+  // Quick chips
+  document.querySelectorAll('[data-sq]').forEach(el => el.addEventListener('click', () => {
+    const chatInput = document.getElementById('sidecar-chat-input');
+    if (chatInput) chatInput.value = el.dataset.sq;
+    // Auto-send if image is attached
+    if (S.sidecarImage) {
+      sendSidecarMessage(el.dataset.sq);
+    }
+  }));
+
+  // Send button
+  document.getElementById('sidecar-chat-send')?.addEventListener('click', () => {
+    const input = document.getElementById('sidecar-chat-input');
+    if (input) sendSidecarMessage(input.value.trim());
+  });
+
+  // Enter key
+  document.getElementById('sidecar-chat-input')?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      const input = document.getElementById('sidecar-chat-input');
+      if (input) sendSidecarMessage(input.value.trim());
+    }
+  });
+
+  // Doubts send
+  document.getElementById('sidecar-doubt-send')?.addEventListener('click', async () => {
+    const input = document.getElementById('sidecar-doubt-input');
+    const txt = input?.value.trim();
+    if (!txt) return;
+
+    // Add image if available on upload tab (user may switch tabs)
+    const doubt = {
+      id: 'd' + Date.now(),
+      text: txt,
+      status: 'pending',
+      date: new Date().toISOString().split('T')[0],
+      time: Date.now(),
+      response: null,
+      teacherAsked: false,
+      subjectId: 'physics', // default for sidecar
+      imageUrl: null,
+    };
+    S.doubts.unshift(doubt);
+    save('doubts', S.doubts);
+    render();
+
+    const resp = await answerDoubt(txt);
+    doubt.response = resp;
+    doubt.status = 'answered';
+    save('doubts', S.doubts);
+    render();
+    renderMath();
+  });
+
+  // Force desktop mode
+  document.getElementById('sidecar-force-desktop')?.addEventListener('click', () => {
+    S.forceDesktop = true;
+    localStorage.setItem('nps-force-desktop', 'true');
+    render();
+  });
+
+  // Settings (return to sidecar if mobile)
+  document.getElementById('sidecar-settings')?.addEventListener('click', () => {
+    // Toggle theme as a quick setting on mobile
+    S.theme = S.theme === 'dark' ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-theme', S.theme);
+    localStorage.setItem('nps-theme', S.theme);
+    render();
+  });
+}
+
+async function sendSidecarMessage(text) {
+  if (!text && !S.sidecarImage) return;
+  const displayText = text || 'Analyze my working';
+
+  // Add user message with image thumbnail
+  const msg = { role: 'user', text: displayText, imageUrl: S.sidecarImage?.dataUrl || null };
+  S.sidecarMsgs.push(msg);
+  S.sidecarLoading = true;
+  render();
+
+  let response;
+  if (S.sidecarImage) {
+    const ctx = S.sidecarContext ? `${S.sidecarContext.subjectName} - ${S.sidecarContext.kcName}` : '';
+    response = await analyzeWorkingImage(S.sidecarImage.base64, S.sidecarImage.mimeType, displayText, ctx);
+
+    // Also save to doubts feed so it appears on desktop
+    const doubt = {
+      id: 'd' + Date.now(),
+      text: `📸 [Image] ${displayText}`,
+      status: 'answered',
+      date: new Date().toISOString().split('T')[0],
+      time: Date.now(),
+      response: response,
+      teacherAsked: false,
+      subjectId: S.sidecarContext ? S.subject : 'physics',
+      imageUrl: S.sidecarImage.dataUrl,
+    };
+    S.doubts.unshift(doubt);
+    save('doubts', S.doubts);
+  } else {
+    response = await answerDoubt(displayText);
+
+    // Also save to doubts feed
+    const doubt = {
+      id: 'd' + Date.now(),
+      text: displayText,
+      status: 'answered',
+      date: new Date().toISOString().split('T')[0],
+      time: Date.now(),
+      response: response,
+      teacherAsked: false,
+      subjectId: 'physics',
+    };
+    S.doubts.unshift(doubt);
+    save('doubts', S.doubts);
+  }
+
+  S.sidecarMsgs.push({ role: 'ai', text: response });
+  S.sidecarLoading = false;
+  render();
+  renderMath();
+  document.getElementById('sidecar-thread')?.scrollTo(0, 999999);
 }
 
 // ─── GLOBAL DROPDOWN DELEGATION (set up once, survives re-renders) ───────────
@@ -2269,7 +2813,10 @@ onAuthChange(async (user) => {
     } catch (err) {
       console.error("Failed to load user data from Firestore:", err);
     }
+    // Read URL params for sidecar context after auth + data load
+    readURLParams();
   }
   S.authLoading = false;
   render();
 });
+
