@@ -2043,3 +2043,171 @@ ul,ol{list-style:none}
   background: rgba(245, 242, 240, 0.95);
 }
 
+/* ── QR Modal Info Notes ── */
+.qr-info-notes {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  margin-bottom: 1.15rem;
+  text-align: left;
+}
+
+.qr-info-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.45rem;
+  font-size: 0.74rem;
+  color: var(--text-muted);
+  line-height: 1.45;
+  padding: 0.4rem 0.6rem;
+  background: var(--bg-elevated);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+}
+
+.qr-info-note strong {
+  color: var(--text-secondary);
+}
+
+.qr-info-note.qr-info-warning {
+  background: rgba(223, 155, 36, 0.08);
+  border-color: rgba(223, 155, 36, 0.2);
+  color: var(--amber);
+}
+
+.qr-info-note.qr-info-warning strong {
+  color: var(--amber);
+}
+
+.qr-info-note code {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.7rem;
+  background: rgba(255, 255, 255, 0.08);
+  padding: 0.1rem 0.35rem;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+}
+
+/* ── Sidecar Login Page (phone not logged in) ── */
+.sidecar-login-page {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+  background: radial-gradient(circle at top, rgba(178, 43, 61, 0.06) 0%, var(--bg) 65%);
+}
+
+.sidecar-login-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  padding: 2rem 1.5rem;
+  max-width: 380px;
+  width: 100%;
+  text-align: center;
+  box-shadow: var(--shadow-lg);
+  animation: sidecarSlideUp 0.4s var(--ease) forwards;
+}
+
+.sidecar-login-logo {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.65rem;
+  margin-bottom: 1.25rem;
+  font-size: 1.25rem;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+}
+
+.sidecar-login-logo-icon {
+  width: 36px;
+  height: 36px;
+  background: var(--accent);
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  box-shadow: 0 4px 12px rgba(178, 43, 61, 0.3);
+}
+
+.sidecar-login-logo-icon svg {
+  width: 18px;
+  height: 18px;
+}
+
+.sidecar-login-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  background: rgba(77, 121, 209, 0.1);
+  border: 1px solid rgba(77, 121, 209, 0.2);
+  color: var(--blue);
+  padding: 0.35rem 0.85rem;
+  border-radius: 100px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 1.25rem;
+}
+
+.sidecar-login-title {
+  font-size: 1.35rem;
+  font-weight: 800;
+  margin-bottom: 0.5rem;
+  color: var(--text);
+}
+
+.sidecar-login-desc {
+  font-size: 0.88rem;
+  color: var(--text-secondary);
+  line-height: 1.6;
+  margin-bottom: 1.75rem;
+}
+
+.sidecar-login-desc strong {
+  color: var(--text);
+}
+
+.sidecar-login-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.65rem;
+  width: 100%;
+  padding: 0.85rem 1.5rem;
+  background: #fff;
+  color: #333;
+  border: 1px solid #ddd;
+  border-radius: var(--radius-pill);
+  font-size: 0.95rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  touch-action: manipulation;
+}
+
+.sidecar-login-btn:active {
+  transform: scale(0.97);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12);
+}
+
+.sidecar-login-hint {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.4rem;
+  font-size: 0.74rem;
+  color: var(--text-muted);
+  line-height: 1.4;
+  margin-top: 1.25rem;
+  text-align: left;
+  padding: 0.5rem 0.6rem;
+  background: var(--bg-elevated);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+}
+

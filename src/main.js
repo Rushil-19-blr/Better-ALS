@@ -6,6 +6,75 @@ import { subjects, notes as defaultNotes, getQuestions } from './data/mock-data.
 import { generateHint, explainConcept, chatWithAI, generateSimilarQuestion, answerDoubt, analyzeWorkingImage } from './ai.js';
 import { onAuthChange, signInWithGoogle, logout, db, onSnapshot } from './firebase.js';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
+import QRCode from 'qrcode';
+
+// ─── LAN URL DETECTION (for QR codes to work on phones during dev) ───
+let _cachedLanUrl = null;
+
+function getSidecarUrl() {
+  const proto = window.location.protocol;
+  const host = window.location.host; // includes port
+  const path = window.location.pathname;
+  const base = `${proto}//${host}${path}`;
+  const kcPart = S.kc ? `&kc=${S.kc}&sub=${S.subject}` : '';
+  const uidPart = S.user ? `&uid=${S.user.uid}` : '';
+  return `${base}?sidecar=1${kcPart}${uidPart}`;
+}
+
+async function getLanBaseUrl() {
+  // If we're already on a non-localhost address (deployed or LAN IP), use as-is
+  const hostname = window.location.hostname;
+  if (hostname !== 'localhost' && hostname !== '127.0.0.1') {
+    return window.location.origin + window.location.pathname;
+  }
+
+  // Try to detect LAN IP via RTCPeerConnection (works in most browsers)
+  if (_cachedLanUrl) return _cachedLanUrl;
+
+  try {
+    const ip = await detectLanIP();
+    if (ip) {
+      _cachedLanUrl = `${window.location.protocol}//${ip}:${window.location.port}${window.location.pathname}`;
+      return _cachedLanUrl;
+    }
+  } catch (e) {
+    console.warn('LAN IP detection failed:', e);
+  }
+
+  // Fallback: just use whatever we have
+  return window.location.origin + window.location.pathname;
+}
+
+function detectLanIP() {
+  return new Promise((resolve) => {
+    const timeout = setTimeout(() => resolve(null), 2000);
+    try {
+      const pc = new RTCPeerConnection({ iceServers: [] });
+      pc.createDataChannel('');
+      pc.createOffer().then(offer => pc.setLocalDescription(offer)).catch(() => {});
+      pc.onicecandidate = (e) => {
+        if (!e || !e.candidate) return;
+        const match = e.candidate.candidate.match(/([0-9]{1,3}\.){3}[0-9]{1,3}/);
+        if (match) {
+          const ip = match[0];
+          // Filter out link-local and loopback
+          if (!ip.startsWith('127.') && !ip.startsWith('0.')) {
+            clearTimeout(timeout);
+            pc.close();
+            resolve(ip);
+          }
+        }
+      };
+    } catch (e) {
+      clearTimeout(timeout);
+      resolve(null);
+    }
+  });
+}
+
+// ── Pending sidecar flag for when user opens QR link but isn't logged in ──
+let _pendingSidecar = false;
+let _pendingSidecarParams = null;
 
 // ─── DYNAMIC MASTERY CALCULATIONS ────────────────────────────
 function getChapterMastery(ch) {
@@ -237,6 +306,9 @@ const S = {
   sidecarSessionUnsubscribe: null, // Firestore onSnapshot cleanup handle
   sidecarLiveQuestion: null,       // { text, options, correct, kcName, subjectName, qIdx, totalQ, qId } — synced FROM desktop
   sidecarSyncedImage: null,        // { dataUrl, aiResponse, questionId, timestamp } — synced FROM phone TO desktop; null after consumed
+  // QR modal state
+  qrSidecarUrl: '',                // Pre-computed sidecar URL for QR modal
+  qrIsLocalhost: false,            // Whether we're running on localhost (warning)
 };
 
 // ── Mobile Detection ──────────────────────────────────────────
@@ -252,6 +324,13 @@ function isMobile() {
 function readURLParams() {
   const params = new URLSearchParams(window.location.search);
   if (params.get('sidecar') === '1') {
+    // Mark that user arrived via sidecar QR code
+    _pendingSidecar = true;
+    _pendingSidecarParams = { 
+      kc: params.get('kc'), 
+      sub: params.get('sub'),
+      uid: params.get('uid')
+    };
     const kcParam = params.get('kc');
     const subParam = params.get('sub');
     if (kcParam && subParam) {
@@ -260,6 +339,9 @@ function readURLParams() {
     }
   }
 }
+
+// Call readURLParams early (before auth) so we know if this is a sidecar load
+readURLParams();
 
 // Apply theme
 document.documentElement.setAttribute('data-theme', S.theme);
@@ -682,6 +764,13 @@ function render() {
     return;
   }
   if (!S.user) {
+    // ── If phone opened via sidecar QR code but not logged in, show special sidecar login ──
+    if (_pendingSidecar) {
+      document.getElementById('app').innerHTML = SidecarLoginPage();
+      _renderedPage = 'sidecar-login';
+      bindSidecarLogin();
+      return;
+    }
     document.getElementById('app').innerHTML = LoginPage();
     _renderedPage = 'login';
     bindLogin();
@@ -689,7 +778,9 @@ function render() {
   }
 
   // ── Sidecar: Mobile Detection Gate ──
-  if (isMobile() && !S.forceDesktop) {
+  if ((isMobile() && !S.forceDesktop) || _pendingSidecar) {
+    // Clear pending flag now that we're in sidecar mode with a user
+    _pendingSidecar = false;
     const isTabChange = _renderedPage !== 'sidecar-' + S.sidecarTab;
     _renderedPage = 'sidecar-' + S.sidecarTab;
     document.getElementById('app').innerHTML = `
@@ -788,9 +879,6 @@ function LoginPage() {
   return `
     <div style="position:relative;min-height:100vh;background:radial-gradient(circle at top, rgba(178,43,61,0.06) 0%, var(--bg) 65%);color:var(--text);overflow:hidden;font-family:'Inter', sans-serif;display:flex;flex-direction:column;justify-content:space-between;box-sizing:border-box;">
 
-      <!-- Matrix rain background -->
-      <canvas id="login-rain-canvas" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:0;opacity:0.18;"></canvas>
-
       <!-- Animated background boxes -->
       <div class="login-bg-boxes" id="login-boxes-wrap"></div>
 
@@ -841,10 +929,6 @@ function LoginPage() {
 
 function bindLogin() {
   lucide?.createIcons();
-
-  // ── Matrix rain canvas ────────────────────────────────────
-  const rainCanvas = document.getElementById('login-rain-canvas');
-  if (rainCanvas) startMatrixRain(rainCanvas);
 
   // ── Background boxes ────────────────────────────────────
   const boxWrap = document.getElementById('login-boxes-wrap');
@@ -913,12 +997,6 @@ function getStreakDays() {
 
 // ── Beams + Matrix init (called after render) ─────────────────
 function initHomeAnimations() {
-  // Beams canvas
-  const canvas = document.getElementById('beams-canvas-bg');
-  if (canvas) {
-    if (_beamsCleanup) _beamsCleanup();
-    _beamsCleanup = startBeamsBackground(canvas);
-  }
   // All-at-once binary flip on the big greeting ("Hi Rushil,")
   const greetingEl = document.getElementById('home-greeting');
   if (greetingEl) {
@@ -944,7 +1022,6 @@ function HomePage() {
   const streakOpen = S.streakOpen || false;
   const firstName = S.user?.displayName?.split(' ')[0] || 'Student';
   return `
-    <canvas id="beams-canvas-bg"></canvas>
     <div class="home-page-wrap">
     <header class="page-header">
       <div><h1 class="greeting" id="home-greeting">Hi ${firstName},</h1><p class="greeting-sub">Let's keep the momentum going.</p></div>
@@ -2316,15 +2393,30 @@ function bind() {
   });
 
   // ── QR / Phone Sidecar Modal ──
-  document.getElementById('btn-open-phone')?.addEventListener('click', () => {
+  document.getElementById('btn-open-phone')?.addEventListener('click', async () => {
     S.showQRModal = true;
+    // Pre-compute the sidecar URL (may need async LAN IP detection)
+    const baseUrl = await getLanBaseUrl();
+    const kcPart = S.kc ? `&kc=${S.kc}&sub=${S.subject}` : '';
+    const uidPart = S.user ? `&uid=${S.user.uid}` : '';
+    S.qrSidecarUrl = `${baseUrl}?sidecar=1${kcPart}${uidPart}`;
+    S.qrIsLocalhost = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
     render();
-    // Render QR code after modal is in DOM
-    requestAnimationFrame(() => {
+    // Render real QR code after modal is in DOM
+    requestAnimationFrame(async () => {
       const canvas = document.getElementById('qr-canvas');
-      const baseUrl = window.location.origin + window.location.pathname;
-      const sidecarUrl = `${baseUrl}?sidecar=1${S.kc ? `&kc=${S.kc}&sub=${S.subject}` : ''}`;
-      renderQRCode(canvas, sidecarUrl);
+      if (canvas) {
+        try {
+          await QRCode.toCanvas(canvas, S.qrSidecarUrl, {
+            width: 200,
+            margin: 1,
+            color: { dark: '#000000', light: '#ffffff' },
+            errorCorrectionLevel: 'M',
+          });
+        } catch (err) {
+          console.error('QR code generation failed:', err);
+        }
+      }
     });
   });
 
@@ -2552,89 +2644,82 @@ function SidecarProgressTab() {
 }
 // ─── QR CODE MODAL (Desktop Practice Page) ───────────────────
 function QRModal() {
-  const baseUrl = window.location.origin + window.location.pathname;
-  const sidecarUrl = `${baseUrl}?sidecar=1${S.kc ? `&kc=${S.kc}&sub=${S.subject}` : ''}`;
+  const sidecarUrl = S.qrSidecarUrl || getSidecarUrl();
+  const isLocalhost = S.qrIsLocalhost;
   return `
     <div class="qr-modal-overlay ${S.showQRModal ? 'active' : ''}" id="qr-overlay">
       <div class="qr-modal">
         <div class="qr-modal-title"><i data-lucide="smartphone"></i>Open on Phone</div>
         <p class="qr-modal-desc">Scan this QR code with your phone to use the Sidecar camera mode for this question.</p>
-        <div class="qr-canvas-wrap"><canvas id="qr-canvas" width="180" height="180"></canvas></div>
+        <div class="qr-canvas-wrap"><canvas id="qr-canvas" width="200" height="200"></canvas></div>
         <div class="qr-link-copy">
           <span class="qr-link-text" id="qr-link-text">${sidecarUrl}</span>
           <button class="qr-copy-btn" id="qr-copy-btn"><i data-lucide="copy"></i>Copy</button>
         </div>
+
+        <div class="qr-info-notes">
+          <div class="qr-info-note">
+            <i data-lucide="wifi" style="width:13px;height:13px;flex-shrink:0"></i>
+            <span>Both devices must be on the <strong>same WiFi network</strong> (dev mode only)</span>
+          </div>
+          <div class="qr-info-note">
+            <i data-lucide="link" style="width:13px;height:13px;flex-shrink:0"></i>
+            <span>Companion pairs automatically — <strong>no mobile login required</strong></span>
+          </div>
+          <div class="qr-info-note">
+            <i data-lucide="camera" style="width:13px;height:13px;flex-shrink:0"></i>
+            <span>Photo your working on phone → AI feedback appears on both screens</span>
+          </div>
+          ${isLocalhost ? `
+            <div class="qr-info-note qr-info-warning">
+              <i data-lucide="alert-triangle" style="width:13px;height:13px;flex-shrink:0"></i>
+              <span>You're on <strong>localhost</strong>. Make sure Vite is running with <code>--host</code> flag or the QR points to your LAN IP.</span>
+            </div>
+          ` : ''}
+        </div>
+
         <button class="qr-modal-close" id="qr-close">Close</button>
       </div>
     </div>
   `;
 }
 
-// ── Simple QR Code Renderer (no external dependencies) ───────
-function renderQRCode(canvas, text) {
-  if (!canvas) return;
-  const ctx = canvas.getContext('2d');
-  const size = 180;
-  canvas.width = size;
-  canvas.height = size;
+// ─── SIDECAR LOGIN PAGE (shown when phone scans QR but isn't logged in) ───
+function SidecarLoginPage() {
+  return `
+    <div class="sidecar-login-page">
+      <div class="sidecar-login-card">
+        <div class="sidecar-login-logo">
+          <div class="sidecar-login-logo-icon"><i data-lucide="brain"></i></div>
+          <span>NPS ALS</span>
+        </div>
+        <div class="sidecar-login-badge"><i data-lucide="smartphone" style="width:14px;height:14px"></i>Companion Mode</div>
+        <h2 class="sidecar-login-title">Sign in to connect</h2>
+        <p class="sidecar-login-desc">Sign in with the <strong>same Google account</strong> you use on your laptop to sync your practice session.</p>
+        <button class="sidecar-login-btn" id="sidecar-login-google">
+          <svg viewBox="0 0 24 24" width="20" height="20"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 0 1-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
+          Continue with Google
+        </button>
+        <div class="sidecar-login-hint">
+          <i data-lucide="info" style="width:13px;height:13px;flex-shrink:0;opacity:0.5"></i>
+          <span>Use the same account as your desktop session for live question sync.</span>
+        </div>
+      </div>
+    </div>
+  `;
+}
 
-  // Simple visual QR-like placeholder + actual URL text
-  // We'll use a compact encoded pattern. For production, use qrcode.js
-  // This generates a visually convincing pattern that encodes the URL hash
-  const cellSize = 6;
-  const cells = Math.floor(size / cellSize);
-  const mid = Math.floor(cells / 2);
-
-  ctx.fillStyle = '#ffffff';
-  ctx.fillRect(0, 0, size, size);
-  ctx.fillStyle = '#000000';
-
-  // Finder patterns (top-left, top-right, bottom-left)
-  const drawFinder = (ox, oy) => {
-    for (let y = 0; y < 7; y++) for (let x = 0; x < 7; x++) {
-      if ((x === 0 || x === 6 || y === 0 || y === 6) || (x >= 2 && x <= 4 && y >= 2 && y <= 4)) {
-        ctx.fillRect((ox + x) * cellSize, (oy + y) * cellSize, cellSize, cellSize);
-      }
+function bindSidecarLogin() {
+  lucide?.createIcons();
+  document.getElementById('sidecar-login-google')?.addEventListener('click', async () => {
+    try {
+      await signInWithGoogle();
+      // Auth state change will trigger render, which will see _pendingSidecar and enter sidecar mode
+    } catch (err) {
+      console.error('Sidecar login error:', err);
+      toast('Sign-in failed. Please try again.', 'error');
     }
-  };
-
-  drawFinder(0, 0);
-  drawFinder(cells - 7, 0);
-  drawFinder(0, cells - 7);
-
-  // Timing patterns
-  for (let i = 8; i < cells - 8; i++) {
-    if (i % 2 === 0) {
-      ctx.fillRect(i * cellSize, 6 * cellSize, cellSize, cellSize);
-      ctx.fillRect(6 * cellSize, i * cellSize, cellSize, cellSize);
-    }
-  }
-
-  // Data area: encode the hash of the URL as a pseudo-random dot pattern
-  let hash = 0;
-  for (let i = 0; i < text.length; i++) {
-    hash = ((hash << 5) - hash + text.charCodeAt(i)) | 0;
-  }
-
-  const rand = (seed) => {
-    seed = (seed * 16807) % 2147483647;
-    return seed;
-  };
-
-  let seed = Math.abs(hash) || 42;
-  for (let y = 9; y < cells - 9; y++) {
-    for (let x = 9; x < cells - 9; x++) {
-      seed = rand(seed);
-      if (seed % 3 === 0) {
-        ctx.fillRect(x * cellSize, y * cellSize, cellSize, cellSize);
-      }
-    }
-  }
-
-  // Alignment pattern center
-  ctx.fillRect((mid - 1) * cellSize, (mid - 1) * cellSize, cellSize * 3, cellSize * 3);
-  ctx.fillStyle = '#ffffff';
-  ctx.fillRect(mid * cellSize, mid * cellSize, cellSize, cellSize);
+  });
 }
 
 // ─── SIDECAR EVENT BINDINGS ─────────────────────────────────
@@ -2929,35 +3014,73 @@ document.addEventListener('keypress', resetIdleTimer);
 
 // ─── BOOT ───────────────────────────────────────────────────
 onAuthChange(async (user) => {
+  // Direct pairing companion mode: if we are loading via sidecar QR code and have a desktop UID,
+  // we can pair directly without requiring authentication on the phone.
+  if (!user && _pendingSidecarParams?.uid) {
+    user = {
+      uid: _pendingSidecarParams.uid,
+      displayName: 'Companion',
+      photoURL: 'https://api.dicebear.com/7.x/avataaars/svg?seed=' + _pendingSidecarParams.uid,
+      isSidecarCompanion: true
+    };
+  }
+
   S.user = user;
   if (user) {
     S.authLoading = true;
     render();
-    try {
-      const userDocRef = doc(db, 'users', user.uid);
-      const docSnap = await getDoc(userDocRef);
-      if (docSnap.exists()) {
-        const data = docSnap.data();
-        if (data.xp !== undefined) S.xp = data.xp;
-        if (data.streak !== undefined) S.streak = data.streak;
-        if (data.answers !== undefined) S.answers = data.answers;
-        if (data.notesList !== undefined) S.notesList = data.notesList;
-        if (data.goals !== undefined) S.goals = data.goals;
-        if (data.doubts !== undefined) S.doubts = data.doubts;
+    
+    // Only load/sync standard user progress metadata if this is a fully authenticated user
+    if (!user.isSidecarCompanion) {
+      try {
+        const userDocRef = doc(db, 'users', user.uid);
+        const docSnap = await getDoc(userDocRef);
+        if (docSnap.exists()) {
+          const data = docSnap.data();
+          if (data.xp !== undefined) S.xp = data.xp;
+          if (data.streak !== undefined) S.streak = data.streak;
+          if (data.answers !== undefined) S.answers = data.answers;
+          if (data.notesList !== undefined) S.notesList = data.notesList;
+          if (data.goals !== undefined) S.goals = data.goals;
+          if (data.doubts !== undefined) S.doubts = data.doubts;
 
-        localStorage.setItem('nps-xp', S.xp);
-        localStorage.setItem('nps-streak', S.streak);
-        localStorage.setItem('nps-notes', JSON.stringify(S.notesList));
-        localStorage.setItem('nps-goals', JSON.stringify(S.goals));
-        localStorage.setItem('nps-doubts', JSON.stringify(S.doubts));
-      } else {
-        await syncToFirebase();
+          localStorage.setItem('nps-xp', S.xp);
+          localStorage.setItem('nps-streak', S.streak);
+          localStorage.setItem('nps-notes', JSON.stringify(S.notesList));
+          localStorage.setItem('nps-goals', JSON.stringify(S.goals));
+          localStorage.setItem('nps-doubts', JSON.stringify(S.doubts));
+        } else {
+          await syncToFirebase();
+        }
+      } catch (err) {
+        console.error("Failed to load user data from Firestore:", err);
       }
-    } catch (err) {
-      console.error("Failed to load user data from Firestore:", err);
+    } else {
+      // For companion mode, try to load user stats from Firestore for the stats tab,
+      // but catch errors gracefully if security rules restrict access.
+      try {
+        const userDocRef = doc(db, 'users', user.uid);
+        const docSnap = await getDoc(userDocRef);
+        if (docSnap.exists()) {
+          const data = docSnap.data();
+          if (data.xp !== undefined) S.xp = data.xp;
+          if (data.streak !== undefined) S.streak = data.streak;
+          if (data.answers !== undefined) S.answers = data.answers;
+        }
+      } catch (err) {
+        console.warn("Could not fetch user stats in companion mode (likely due to security rules):", err);
+      }
     }
-    // Read URL params for sidecar context after auth + data load
-    readURLParams();
+
+    // Apply any pending sidecar context from URL params
+    if (_pendingSidecarParams) {
+      const kcParam = _pendingSidecarParams.kc;
+      const subParam = _pendingSidecarParams.sub;
+      if (kcParam && subParam) {
+        const { kc, sub } = getKcInfo(subParam, kcParam);
+        S.sidecarContext = { kcName: kc?.name || kcParam, subjectName: sub?.name || subParam };
+      }
+    }
     // Start real-time cross-device session sync
     subscribeToSession(user.uid);
   } else {
