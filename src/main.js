@@ -4,7 +4,7 @@
 import './style.css';
 import { subjects, notes as defaultNotes, getQuestions } from './data/mock-data.js';
 import { generateHint, explainConcept, chatWithAI, generateSimilarQuestion, answerDoubt, analyzeWorkingImage } from './ai.js';
-import { onAuthChange, signInWithGoogle, logout, db } from './firebase.js';
+import { onAuthChange, signInWithGoogle, logout, db, onSnapshot } from './firebase.js';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
 
 // ─── DYNAMIC MASTERY CALCULATIONS ────────────────────────────
@@ -66,6 +66,120 @@ async function syncToFirebase() {
   }
 }
 
+// ── Compress image using Canvas (keeps Firestore doc < 200KB) ──
+async function compressImage(dataUrl, maxWidth = 900, quality = 0.72) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      const scale = Math.min(1, maxWidth / img.width);
+      const w = Math.round(img.width * scale);
+      const h = Math.round(img.height * scale);
+      const canvas = document.createElement('canvas');
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, w, h);
+      resolve(canvas.toDataURL('image/jpeg', quality));
+    };
+    img.onerror = () => resolve(dataUrl); // fallback to original
+    img.src = dataUrl;
+  });
+}
+
+// ── Push current practice question to Firestore session doc ──
+async function pushSessionToFirestore() {
+  if (!S.user || !db || !S.kc) return;
+  try {
+    const qs = getQuestions(S.kc);
+    const q = qs[S.qIdx];
+    if (!q) return;
+    const { kc, sub } = getKcInfo(S.subject, S.kc);
+    const sessionRef = doc(db, 'sessions', S.user.uid);
+    await setDoc(sessionRef, {
+      currentKc: S.kc,
+      currentSubject: S.subject,
+      currentQIdx: S.qIdx,
+      totalQ: qs.length,
+      questionId: q.id,
+      questionText: q.text,
+      questionOptions: q.options,
+      questionCorrect: q.correct,
+      kcName: kc?.name || S.kc,
+      subjectName: sub?.name || S.subject,
+      updatedAt: Date.now(),
+      // Don't overwrite sidecarImage if it was just set by phone
+    }, { merge: true });
+  } catch (err) {
+    console.error('Failed to push session to Firestore:', err);
+  }
+}
+
+// ── Subscribe to real-time session sync via Firestore onSnapshot ──
+function subscribeToSession(uid) {
+  // Unsubscribe from any existing listener
+  if (S.sidecarSessionUnsubscribe) {
+    S.sidecarSessionUnsubscribe();
+    S.sidecarSessionUnsubscribe = null;
+  }
+  if (!db || !uid) return;
+
+  const sessionRef = doc(db, 'sessions', uid);
+  const unsubscribe = onSnapshot(sessionRef, (snap) => {
+    if (!snap.exists()) return;
+    const data = snap.data();
+
+    const isSidecar = isMobile() && !S.forceDesktop;
+
+    if (isSidecar) {
+      // ── PHONE SIDE: update live question from desktop ──
+      if (data.questionText && data.updatedAt) {
+        const newLive = {
+          text: data.questionText,
+          options: data.questionOptions || [],
+          correct: data.questionCorrect,
+          kcName: data.kcName,
+          subjectName: data.subjectName,
+          qIdx: data.currentQIdx,
+          totalQ: data.totalQ,
+          qId: data.questionId,
+        };
+        S.sidecarLiveQuestion = newLive;
+        // Update context for AI prompts
+        S.sidecarContext = { kcName: data.kcName, subjectName: data.subjectName };
+        render();
+      }
+    } else {
+      // ── DESKTOP SIDE: consume synced image from phone ──
+      if (data.sidecarImage && data.sidecarImage.timestamp) {
+        const lastTimestamp = S._lastConsumedSidecarTs || 0;
+        if (data.sidecarImage.timestamp > lastTimestamp) {
+          S._lastConsumedSidecarTs = data.sidecarImage.timestamp;
+          // Inject into the desktop chat panel as a special "from phone" message
+          const fromPhoneMsg = {
+            role: 'ai',
+            text: `📱 **From your phone:**\n\n${data.sidecarImage.aiResponse || 'Photo received.'}`,
+            imageUrl: data.sidecarImage.dataUrl,
+            fromPhone: true,
+          };
+          S.chatMsgs.push(fromPhoneMsg);
+          // Switch to chat tab if on practice page
+          if (S.page === 'practice') {
+            S.chatHidden = false;
+            render();
+            setTimeout(() => {
+              document.getElementById('chat-msgs')?.scrollTo(0, 999999);
+            }, 100);
+          }
+        }
+      }
+    }
+  }, (err) => {
+    console.error('Session onSnapshot error:', err);
+  });
+
+  S.sidecarSessionUnsubscribe = unsubscribe;
+}
+
 // ─── STATE ───────────────────────────────────────────────────
 const S = {
   page: 'home',
@@ -112,13 +226,17 @@ const S = {
   // Test setup memo
   testSetup: { subjectId: null, chapterId: 'all', kcId: 'all', time: 30, count: 10 },
   // ── Sidecar Mode ──
-  sidecarTab: 'upload',          // 'upload' | 'doubts' | 'progress'
-  sidecarImage: null,            // { base64, mimeType, dataUrl }
-  sidecarMsgs: [],               // chat thread for sidecar image analysis
+  sidecarTab: 'live',              // 'live' | 'progress'
+  sidecarImage: null,              // { base64, mimeType, dataUrl } — pending image on phone
+  sidecarMsgs: [],                 // chat thread for sidecar image analysis
   sidecarLoading: false,
-  sidecarContext: null,          // { kcName, subjectName } from URL params
+  sidecarContext: null,            // { kcName, subjectName } from URL params
   forceDesktop: localStorage.getItem('nps-force-desktop') === 'true',
   showQRModal: false,
+  // Real-time session sync
+  sidecarSessionUnsubscribe: null, // Firestore onSnapshot cleanup handle
+  sidecarLiveQuestion: null,       // { text, options, correct, kcName, subjectName, qIdx, totalQ, qId } — synced FROM desktop
+  sidecarSyncedImage: null,        // { dataUrl, aiResponse, questionId, timestamp } — synced FROM phone TO desktop; null after consumed
 };
 
 // ── Mobile Detection ──────────────────────────────────────────
@@ -552,6 +670,7 @@ function startPractice(kcId, subId) {
   go('practice', { kc: kcId, subject: subId });
   startTimer();
   S.qStartTime = Date.now();
+  pushSessionToFirestore();
 }
 
 // ─── RENDER ─────────────────────────────────────────────────
@@ -1069,11 +1188,9 @@ function HintsPanel(q) {
 
 // ─── CHAT PANEL ─────────────────────────────────────────────
 function ChatPanel() {
-  return `<div class="chat-panel ${S.chatLoading ? 'thinking' : ''}">
-    <div style="display:flex; justify-content:flex-end; padding: 0.5rem 0.5rem 0 0;">
-       <button class="btn-icon" id="hide-chat-btn" style="width:24px;height:24px;min-height:0;color:var(--text-secondary);" title="Hide Chat"><i data-lucide="x" style="width:14px;height:14px;"></i></button>
-    </div>
-    <div class="chat-tabs" style="padding-top:0;">
+  return `<div class="chat-panel ${S.chatLoading ? 'thinking' : ''}" style="position:relative">
+    <button class="btn-icon" id="hide-chat-btn" style="position:absolute; right:0.5rem; top:0.5rem; z-index:10; width:28px; height:28px; min-height:0; color:var(--text-secondary); background:var(--bg-elevated); border:1px solid var(--border); border-radius:50%;" title="Hide Chat"><i data-lucide="x" style="width:14px;height:14px;"></i></button>
+    <div class="chat-tabs" style="padding-top:0; padding-right:2.5rem;">
       <div class="chat-tab ${S.chatTab === 'ask' ? 'active' : ''}" data-ct="ask">Ask AI</div>
       <div class="chat-tab ${S.chatTab === 'hints' ? 'active' : ''}" data-ct="hints">Hints</div>
       <div class="chat-tab ${S.chatTab === 'notes' ? 'active' : ''}" data-ct="notes">Notes</div>
@@ -1120,7 +1237,17 @@ function formatAIResponse(text) {
 
 function ChatMessages() {
   if (!S.chatMsgs.length) return `<div class="empty-state" style="padding:1.5rem"><i data-lucide="message-circle"></i><h3>Ask anything</h3><p>Get step-by-step help with this question</p></div>`;
-  return S.chatMsgs.map(m => `<div class="chat-bubble ${m.role}">${m.role === 'ai' ? formatAIResponse(m.text) : m.text}</div>`).join('') + (S.chatLoading ? `<div class="chat-bubble ai loading"><div class="spinner"></div>Thinking...</div>` : '');
+  return S.chatMsgs.map(m => {
+    if (m.fromPhone) {
+      return `<div class="chat-bubble ai chat-from-phone-bubble">
+        <div class="from-phone-label"><i data-lucide="smartphone" style="width:10px;height:10px"></i>From your Phone</div>
+        ${m.imageUrl ? `<img class="from-phone-img" src="${m.imageUrl}" alt="Photo from phone">` : ''}
+        ${formatAIResponse(m.text.replace('📱 **From your phone:**\n\n', ''))}
+      </div>`;
+    }
+    return `<div class="chat-bubble ${m.role}">${m.role === 'ai' ? formatAIResponse(m.text) : m.text}</div>`;
+  }).join('') + (S.chatLoading ? `<div class="chat-bubble ai loading"><div class="spinner"></div>Thinking...</div>` : '');
+
 }
 
 function ChatHintsView() {
@@ -1297,6 +1424,11 @@ function NotesPage() {
             <div class="empty-state"><i data-lucide="sticky-note"></i><h3>No notes yet</h3><p>Save notes while practicing</p></div>`;
   }
 
+  // Default to first note if none selected
+  if (!S.activeNoteId && S.notesList.length > 0) {
+    S.activeNoteId = S.notesList[0].id;
+  }
+
   const grouped = {};
   S.notesList.forEach(n => {
     const subId = n.subjectId || 'general';
@@ -1306,64 +1438,47 @@ function NotesPage() {
     grouped[subId][kcName].push(n);
   });
 
+  const activeNote = S.notesList.find(n => n.id === S.activeNoteId) || S.notesList[0];
+
   return `
-    <header class="page-header"><div><h1 class="greeting" id="page-title-mx" style="font-size:1.35rem">Notes</h1><p class="greeting-sub">Your saved question notes</p></div>
-    <div class="header-actions"><button class="btn-pill" id="print-notes"><i data-lucide="printer"></i>Print</button></div></header>
-    <div class="notes-container" style="display:flex;flex-direction:column;gap:1.5rem">
-      ${Object.entries(grouped).map(([subId, kcs]) => {
-        const sub = getSubject(subId);
-        const subName = sub ? sub.name : (subId === 'general' ? 'General Notes' : subId);
-        const color = sub ? sub.color : 'var(--accent)';
-        return `
-          <div class="notes-subject-group" style="background:var(--bg-surface);border:1px solid var(--border);border-radius:var(--radius-lg);overflow:hidden">
-            <div style="background:var(--bg-elevated);padding:1rem 1.25rem;border-bottom:1px solid var(--border);border-left:4px solid ${color}">
-              <h2 style="font-size:1.05rem;font-weight:700;margin:0">${subName}</h2>
-            </div>
-            <div style="padding:1rem 1.25rem;display:flex;flex-direction:column;gap:1.25rem">
-              ${Object.entries(kcs).map(([kcName, notes]) => `
-                <div class="notes-kc-group">
-                  <h3 style="font-size:0.9rem;font-weight:600;color:var(--text-secondary);margin:0 0 0.75rem 0;display:flex;align-items:center;gap:0.4rem"><i data-lucide="folder" style="width:14px;height:14px"></i>${kcName}</h3>
-                  <div class="notes-grid">
-                    ${notes.map(n => `
-                      <div class="note-card" style="cursor:pointer" data-edit-note="${n.id}">
-                        <div style="display:flex;justify-content:space-between;align-items:start;margin-bottom:.3rem"><span style="font-size:.68rem;color:var(--text-muted)">${n.createdAt}</span></div>
-                        <div class="note-q">${n.questionText}</div>
-                        <div class="note-content" style="max-height:80px;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical">${n.noteContent}</div>
-                      </div>
-                    `).join('')}
+    <header class="page-header" style="margin-bottom:0.75rem">
+      <div><h1 class="greeting" id="page-title-mx" style="font-size:1.35rem">Notes</h1></div>
+    </header>
+    <div class="notes-layout">
+      <div class="notes-sidebar">
+        <div class="notes-sidebar-header"><i data-lucide="book" style="margin-right:0.4rem;width:16px;height:16px"></i> Notebooks</div>
+        ${Object.entries(grouped).map(([subId, kcs]) => {
+          const sub = getSubject(subId);
+          const subName = sub ? sub.name : (subId === 'general' ? 'General Notes' : subId);
+          const color = sub ? sub.color : 'var(--accent)';
+          return `
+            <div class="notes-group">
+              <div class="notes-group-title" style="color:${color}"><i data-lucide="folder" style="width:12px;height:12px"></i> ${subName}</div>
+              ${Object.values(kcs).flat().sort((a,b)=> new Date(b.createdAt) - new Date(a.createdAt)).map(n => `
+                <div class="notes-nav-item ${n.id === S.activeNoteId ? 'active' : ''}" data-nav-note="${n.id}">
+                  <div class="notes-nav-title">${n.questionText || 'Untitled Note'}</div>
+                  <div class="notes-nav-meta">
+                    <span>${n.kcName || 'General'}</span>
+                    <span>${n.createdAt}</span>
                   </div>
                 </div>
               `).join('')}
             </div>
-          </div>
-        `;
-      }).join('')}
-    </div>
-    ${S.editingNote ? (() => {
-      const n = S.notesList.find(x => x.id === S.editingNote);
-      if (!n) return '';
-      return `
-        <div class="modal-overlay" style="display:flex;align-items:center;justify-content:center;z-index:1000;background:rgba(0,0,0,0.6);backdrop-filter:blur(4px);position:fixed;top:0;left:0;right:0;bottom:0">
-          <div class="modal-content" style="background:var(--bg-body);width:600px;max-width:90vw;border-radius:var(--radius-xl);border:1px solid var(--border);box-shadow:var(--shadow-xl);display:flex;flex-direction:column">
-            <div style="padding:1.25rem;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
-              <h3 style="font-size:1.1rem;font-weight:600;margin:0">Edit Note</h3>
-              <button class="btn-icon" data-close-modal><i data-lucide="x"></i></button>
-            </div>
-            <div style="padding:1.25rem;flex:1;overflow-y:auto">
-              <div style="font-size:0.85rem;color:var(--text-secondary);background:var(--bg-surface);padding:1rem;border-radius:var(--radius-md);margin-bottom:1rem">${n.questionText}</div>
-              <textarea id="edit-note-textarea" style="width:100%;height:200px;background:var(--bg-input);border:1px solid var(--border);border-radius:var(--radius-md);padding:1rem;color:var(--text);font-size:0.95rem;resize:vertical;outline:none">${n.noteContent}</textarea>
-            </div>
-            <div style="padding:1rem 1.25rem;border-top:1px solid var(--border);display:flex;justify-content:space-between;background:var(--bg-surface);border-bottom-left-radius:var(--radius-xl);border-bottom-right-radius:var(--radius-xl)">
-              <button class="btn-action ghost" data-del-note="${n.id}" style="color:var(--red)"><i data-lucide="trash-2"></i>Delete</button>
-              <div style="display:flex;gap:0.75rem">
-                <button class="btn-action secondary" data-close-modal>Cancel</button>
-                <button class="btn-action primary" id="btn-save-note" data-note-id="${n.id}"><i data-lucide="save"></i>Save Changes</button>
-              </div>
-            </div>
+          `;
+        }).join('')}
+      </div>
+      <div class="notes-editor-pane">
+        <div class="notes-editor-header">
+          <div class="notes-editor-title">${activeNote.questionText || 'Untitled Note'}</div>
+          <div class="notes-editor-meta">
+            <span><i data-lucide="tag" style="width:12px;height:12px;margin-right:0.2rem;vertical-align:-2px"></i> ${activeNote.kcName || 'General'}</span>
+            <span><i data-lucide="calendar" style="width:12px;height:12px;margin-right:0.2rem;vertical-align:-2px"></i> ${activeNote.createdAt}</span>
+            <button class="btn-action ghost" data-del-note="${activeNote.id}" style="color:var(--red);padding:0.1rem 0.5rem;font-size:0.75rem;margin-left:auto"><i data-lucide="trash-2" style="width:12px;height:12px"></i> Delete</button>
           </div>
         </div>
-      `;
-    })() : ''}
+        <textarea class="notes-textarea" id="active-note-editor" data-note-id="${activeNote.id}" placeholder="Start typing your notes here...">${activeNote.noteContent || ''}</textarea>
+      </div>
+    </div>
   `;
 }
 
@@ -1635,6 +1750,11 @@ function SettingsPage() {
             <div class="toggle-knob"></div>
           </button>
         </div>
+        ${isMobile() && S.forceDesktop ? `
+        <div class="setting-row" style="margin-top:1rem;padding-top:1rem;border-top:1px solid var(--border)">
+          <div class="setting-info"><span class="setting-label">Companion Mode</span><span class="setting-desc">Return to the mobile-optimized sidecar view</span></div>
+          <button class="btn-action primary" id="btn-restore-sidecar"><i data-lucide="smartphone"></i>Switch to Sidecar</button>
+        </div>` : ''}
       </div>
       <div class="goal-form">
         <div class="section-title">Account</div>
@@ -1951,14 +2071,14 @@ function bind() {
   document.getElementById('btn-next')?.addEventListener('click', () => {
     if (S.retryQ) { S.retryQ = null; render(); return; } // Clear retry question, return to original
     const qs = getQuestions(S.kc);
-    if (S.qIdx < qs.length - 1) { S.qIdx++; S.selected = null; S.retryQ = null; S.qStartTime = Date.now(); render(); }
+    if (S.qIdx < qs.length - 1) { S.qIdx++; S.selected = null; S.retryQ = null; S.qStartTime = Date.now(); render(); pushSessionToFirestore(); }
     else { toast('KC Complete!', 'success'); go('subject', { subject: S.subject }); }
   });
 
   // Skip
   document.getElementById('btn-skip')?.addEventListener('click', () => {
     const qs = getQuestions(S.kc);
-    if (S.qIdx < qs.length - 1) { S.qIdx++; S.selected = null; S.retryQ = null; S.qStartTime = Date.now(); render(); }
+    if (S.qIdx < qs.length - 1) { S.qIdx++; S.selected = null; S.retryQ = null; S.qStartTime = Date.now(); render(); pushSessionToFirestore(); }
   });
   
   // Skip Retry
@@ -1969,7 +2089,7 @@ function bind() {
   });
 
   // Dots
-  document.querySelectorAll('[data-dot]').forEach(el => el.addEventListener('click', () => { S.qIdx = parseInt(el.dataset.dot); S.selected = null; S.retryQ = null; render(); }));
+  document.querySelectorAll('[data-dot]').forEach(el => el.addEventListener('click', () => { S.qIdx = parseInt(el.dataset.dot); S.selected = null; S.retryQ = null; render(); pushSessionToFirestore(); }));
 
   // Hint actions
   document.querySelector('[data-action="hint"]')?.addEventListener('click', async () => {
@@ -2033,30 +2153,42 @@ function bind() {
     render();
   });
 
-  // Edit note
-  document.querySelectorAll('[data-edit-note]').forEach(el => el.addEventListener('click', () => {
-    S.editingNote = el.dataset.editNote; render();
+  // Notes Revamp Bindings
+  document.querySelectorAll('[data-nav-note]').forEach(el => el.addEventListener('click', () => {
+    S.activeNoteId = el.dataset.navNote;
+    render();
   }));
-  document.querySelectorAll('[data-close-modal]').forEach(el => el.addEventListener('click', () => {
-    S.editingNote = null; render();
-  }));
-  document.getElementById('btn-save-note')?.addEventListener('click', (e) => {
-    const id = e.currentTarget.dataset.noteId;
-    const txt = document.getElementById('edit-note-textarea')?.value;
-    if (txt !== undefined) {
+
+  const activeEditor = document.getElementById('active-note-editor');
+  if (activeEditor) {
+    let saveTimeout;
+    activeEditor.addEventListener('input', (e) => {
+      const id = e.target.dataset.noteId;
       const n = S.notesList.find(x => x.id === id);
-      if (n) { n.noteContent = txt; save('notes', S.notesList); toast('Note updated!', 'success'); }
-    }
-    S.editingNote = null; render();
-  });
+      if (n) {
+        n.noteContent = e.target.value;
+        clearTimeout(saveTimeout);
+        saveTimeout = setTimeout(() => {
+          save('notes', S.notesList);
+        }, 800);
+      }
+    });
+  }
 
   // Delete note
   document.querySelectorAll('[data-del-note]').forEach(el => el.addEventListener('click', (e) => {
     e.stopPropagation();
-    S.notesList = S.notesList.filter(n => n.id !== el.currentTarget.dataset.delNote);
-    S.editingNote = null;
+    const id = el.currentTarget.dataset.delNote;
+    S.notesList = S.notesList.filter(n => n.id !== id);
+    if (S.activeNoteId === id) S.activeNoteId = null;
     save('notes', S.notesList); toast('Note deleted.', 'info'); render();
   }));
+  
+  // Sidecar Mode Restoration
+  document.getElementById('btn-restore-sidecar')?.addEventListener('click', () => {
+    S.forceDesktop = false;
+    render();
+  });
 
   // Goal create
   document.getElementById('goal-create')?.addEventListener('click', () => {
@@ -2223,6 +2355,7 @@ function bind() {
 
 function SidecarPage() {
   const firstName = S.user?.displayName?.split(' ')[0] || 'Student';
+  const hasLiveSession = !!S.sidecarLiveQuestion;
   return `
     <div class="sidecar-layout">
       <header class="sidecar-header">
@@ -2230,129 +2363,119 @@ function SidecarPage() {
           <div class="sidecar-logo-icon"><i data-lucide="brain"></i></div>
           <span class="sidecar-logo-text">NPS ALS</span>
         </div>
+        <div style="display:flex;align-items:center;gap:0.5rem">
+          ${hasLiveSession ? `<div class="sidecar-live-badge"><span class="sidecar-live-dot"></span>LIVE</div>` : ''}
+        </div>
         <div class="sidecar-header-actions">
-          <button class="sidecar-header-btn" id="sidecar-settings"><i data-lucide="settings"></i></button>
+          <button class="sidecar-header-btn" id="sidecar-settings"><i data-lucide="sun-moon"></i></button>
           <img class="sidecar-avatar" src="${S.user?.photoURL || 'https://api.dicebear.com/7.x/avataaars/svg?seed=' + (S.user?.uid || 'user')}" alt="${firstName}" onerror="this.style.display='none'">
         </div>
       </header>
 
       <div class="sidecar-body">
-        ${S.sidecarTab === 'upload' ? SidecarUploadTab() : S.sidecarTab === 'doubts' ? SidecarDoubtsTab() : SidecarProgressTab()}
+        ${S.sidecarTab === 'live' ? SidecarLiveTab() : SidecarProgressTab()}
 
         <div class="sidecar-mode-switch">
-          <button class="sidecar-mode-switch-btn" id="sidecar-force-desktop"><i data-lucide="monitor"></i>Switch to Normal Questions Mode</button>
+          <button class="sidecar-mode-switch-btn" id="sidecar-force-desktop"><i data-lucide="monitor"></i>Switch to Full Desktop Mode</button>
           <div class="sidecar-mode-switch-warning"><i data-lucide="alert-triangle"></i>Not recommended on mobile</div>
         </div>
       </div>
 
       <nav class="sidecar-tabbar">
-        <button class="sidecar-tab ${S.sidecarTab === 'upload' ? 'active' : ''}" data-stab="upload"><i data-lucide="camera"></i>Upload</button>
-        <button class="sidecar-tab ${S.sidecarTab === 'doubts' ? 'active' : ''}" data-stab="doubts"><i data-lucide="help-circle"></i>Doubts</button>
+        <button class="sidecar-tab ${S.sidecarTab === 'live' ? 'active' : ''}" data-stab="live"><i data-lucide="camera"></i>Companion</button>
         <button class="sidecar-tab ${S.sidecarTab === 'progress' ? 'active' : ''}" data-stab="progress"><i data-lucide="bar-chart-3"></i>Progress</button>
       </nav>
     </div>
   `;
 }
 
-function SidecarUploadTab() {
+function SidecarLiveTab() {
+  const lq = S.sidecarLiveQuestion;
   const ctx = S.sidecarContext;
+
   return `
     <div class="sidecar-animate-in">
-      <div class="sidecar-mode-badge"><i data-lucide="smartphone"></i>Sidecar Mode</div>
-      <h1 class="sidecar-section-title">📸 Photo your Working</h1>
-      <p class="sidecar-section-sub">Take a photo of your handwritten solution, and the AI will tell you where you went wrong.</p>
-    </div>
-
-    ${ctx ? `
-      <div class="sidecar-context-card sidecar-animate-in">
-        <div class="sidecar-context-dot"></div>
-        <div class="sidecar-context-text">Linked to: <strong>${ctx.subjectName} — ${ctx.kcName}</strong></div>
-      </div>
-    ` : ''}
-
-    ${!S.sidecarImage ? `
-      <div class="sidecar-upload-zone sidecar-animate-in">
-        <button class="sidecar-camera-btn" id="sidecar-take-photo"><i data-lucide="camera"></i>Take Photo of Your Working</button>
-        <button class="sidecar-gallery-btn" id="sidecar-gallery"><i data-lucide="image"></i>Choose from Gallery</button>
-        <input type="file" id="sidecar-file-camera" accept="image/*" capture="environment" style="display:none">
-        <input type="file" id="sidecar-file-gallery" accept="image/*" style="display:none">
-      </div>
-    ` : `
-      <div class="sidecar-image-preview sidecar-animate-in">
-        <img src="${S.sidecarImage.dataUrl}" alt="Your working">
-        <button class="sidecar-image-remove" id="sidecar-remove-img"><i data-lucide="x"></i></button>
-      </div>
-    `}
-
-    <div class="sidecar-quick-chips sidecar-animate-in">
-      <button class="sidecar-chip" data-sq="Where did I go wrong?">Where did I go wrong?</button>
-      <button class="sidecar-chip" data-sq="Check my solution">Check my solution</button>
-      <button class="sidecar-chip" data-sq="What concept is this?">What concept is this?</button>
-      <button class="sidecar-chip" data-sq="Show the correct approach">Show correct approach</button>
-    </div>
-
-    <div class="sidecar-chat-area sidecar-animate-in">
-      <div class="sidecar-prompt-input">
-        <input type="text" id="sidecar-chat-input" placeholder="${S.sidecarImage ? 'Ask about your working...' : 'Upload an image first, or type a doubt...'}" />
-        <button class="sidecar-send-btn" id="sidecar-chat-send"><i data-lucide="arrow-up"></i></button>
-      </div>
-
-      <div class="sidecar-thread" id="sidecar-thread">
-        ${S.sidecarMsgs.length === 0 && !S.sidecarLoading ? `
-          <div class="sidecar-empty">
-            <i data-lucide="message-circle"></i>
-            <h3>Your AI tutor is ready</h3>
-            <p>Upload a photo of your working and ask anything about it</p>
+      ${lq ? `
+        <!-- LIVE QUESTION CARD synced from desktop -->
+        <div class="sidecar-live-question-card">
+          <div class="sidecar-live-q-header">
+            <div style="display:flex;align-items:center;gap:0.5rem">
+              <div class="sidecar-live-dot-sm"></div>
+              <span style="font-size:0.7rem;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:var(--green)">Live from Desktop</span>
+            </div>
+            <span style="font-size:0.72rem;color:var(--text-muted);font-weight:600">${lq.subjectName || ''} · ${lq.kcName || ''}</span>
           </div>
-        ` : ''}
-        ${S.sidecarMsgs.map(m => {
-          if (m.role === 'user') {
-            return `<div class="sidecar-msg user">${m.imageUrl ? `<img class="sidecar-msg-img" src="${m.imageUrl}" alt="Working">` : ''}${m.text}</div>`;
-          } else {
-            return `<div class="sidecar-msg ai">${formatAIResponse(m.text)}</div>`;
-          }
-        }).join('')}
-        ${S.sidecarLoading ? `<div class="sidecar-msg loading"><div class="spinner"></div>Analyzing your working...</div>` : ''}
-      </div>
-    </div>
-  `;
-}
-
-function SidecarDoubtsTab() {
-  return `
-    <div class="sidecar-animate-in">
-      <div class="sidecar-mode-badge"><i data-lucide="smartphone"></i>Sidecar Mode</div>
-      <h1 class="sidecar-section-title">❓ Your Doubts</h1>
-      <p class="sidecar-section-sub">Ask doubts here — they'll sync to your laptop session.</p>
-    </div>
-
-    <div class="sidecar-animate-in" style="margin-bottom:1.25rem">
-      <div class="sidecar-prompt-input">
-        <input type="text" id="sidecar-doubt-input" placeholder="Type your doubt..." />
-        <button class="sidecar-send-btn" id="sidecar-doubt-send"><i data-lucide="arrow-up"></i></button>
-      </div>
-    </div>
-
-    <div class="sidecar-animate-in">
-      ${S.doubts.length === 0 ? `
-        <div class="sidecar-empty">
-          <i data-lucide="help-circle"></i>
-          <h3>No doubts yet</h3>
-          <p>Ask a question above — it'll appear on your laptop too</p>
+          <div class="sidecar-live-q-counter">Question ${(lq.qIdx ?? 0) + 1} of ${lq.totalQ || '?'}</div>
+          <div class="sidecar-live-q-text">${lq.text || ''}</div>
+          ${lq.options && lq.options.length ? `
+            <div class="sidecar-live-options">
+              ${lq.options.map((opt, i) => `
+                <div class="sidecar-live-option">${String.fromCharCode(65 + i)}. ${opt}</div>
+              `).join('')}
+            </div>
+          ` : ''}
         </div>
-      ` : S.doubts.slice(0, 20).map(d => `
-        <div class="sidecar-doubt-card">
-          <div class="sidecar-doubt-header">
-            <span class="sidecar-doubt-badge ${d.response ? 'answered' : 'pending'}">${d.response ? 'Answered' : 'Pending'}</span>
-            <span style="font-size:0.72rem;color:var(--text-muted)">${d.date || ''}</span>
-          </div>
-          <div style="display:flex;gap:0.75rem;align-items:flex-start">
-            ${d.imageUrl ? `<img class="sidecar-doubt-img-thumb" src="${d.imageUrl}" alt="Attachment">` : ''}
-            <div class="sidecar-doubt-text">${d.text}</div>
-          </div>
-          ${d.response ? `<div class="sidecar-doubt-response">${formatAIResponse(d.response)}</div>` : ''}
+      ` : `
+        <!-- Waiting for desktop session -->
+        <div class="sidecar-waiting-card">
+          <div class="sidecar-waiting-pulse"><i data-lucide="wifi"></i></div>
+          <h3>Waiting for your desktop session</h3>
+          <p>Open a practice set on your laptop — the current question will appear here in real-time.</p>
         </div>
-      `).join('')}
+      `}
+    </div>
+
+    <!-- Camera upload + AI analysis -->
+    <div class="sidecar-animate-in">
+      <div class="sidecar-upload-label">
+        <i data-lucide="camera" style="width:14px;height:14px"></i>
+        ${lq ? 'Photo your working for this question' : 'Photo your working'}
+      </div>
+      ${!S.sidecarImage ? `
+        <div class="sidecar-upload-zone">
+          <button class="sidecar-camera-btn" id="sidecar-take-photo"><i data-lucide="camera"></i>Take Photo of Your Working</button>
+          <button class="sidecar-gallery-btn" id="sidecar-gallery"><i data-lucide="image"></i>Choose from Gallery</button>
+          <input type="file" id="sidecar-file-camera" accept="image/*" capture="environment" style="display:none">
+          <input type="file" id="sidecar-file-gallery" accept="image/*" style="display:none">
+        </div>
+      ` : `
+        <div class="sidecar-image-preview sidecar-animate-in">
+          <img src="${S.sidecarImage.dataUrl}" alt="Your working">
+          <button class="sidecar-image-remove" id="sidecar-remove-img"><i data-lucide="x"></i></button>
+        </div>
+      `}
+
+      <div class="sidecar-quick-chips">
+        <button class="sidecar-chip" data-sq="Where did I go wrong?">Where did I go wrong?</button>
+        <button class="sidecar-chip" data-sq="Check my solution">Check my solution</button>
+        <button class="sidecar-chip" data-sq="What concept is this?">What concept?</button>
+        <button class="sidecar-chip" data-sq="Show the correct approach">Show approach</button>
+      </div>
+
+      <div class="sidecar-chat-area">
+        <div class="sidecar-prompt-input">
+          <input type="text" id="sidecar-chat-input" placeholder="${S.sidecarImage ? 'Ask about your working...' : 'Type a question or upload a photo...'}" />
+          <button class="sidecar-send-btn" id="sidecar-chat-send"><i data-lucide="arrow-up"></i></button>
+        </div>
+
+        <div class="sidecar-thread" id="sidecar-thread">
+          ${S.sidecarMsgs.length === 0 && !S.sidecarLoading ? `
+            <div class="sidecar-empty">
+              <i data-lucide="message-circle"></i>
+              <h3>Your AI tutor is ready</h3>
+              <p>Take a photo of your working, then ask what went wrong. The analysis will also appear on your laptop.</p>
+            </div>
+          ` : ''}
+          ${S.sidecarMsgs.map(m => {
+            if (m.role === 'user') {
+              return `<div class="sidecar-msg user">${m.imageUrl ? `<img class="sidecar-msg-img" src="${m.imageUrl}" alt="Working">` : ''}${m.text}</div>`;
+            } else {
+              return `<div class="sidecar-msg ai">${formatAIResponse(m.text)}</div>`;
+            }
+          }).join('')}
+          ${S.sidecarLoading ? `<div class="sidecar-msg loading"><div class="spinner"></div>Analyzing your working...</div>` : ''}
+        </div>
+      </div>
     </div>
   `;
 }
@@ -2365,8 +2488,8 @@ function SidecarProgressTab() {
 
   return `
     <div class="sidecar-animate-in">
-      <div class="sidecar-mode-badge"><i data-lucide="smartphone"></i>Sidecar Mode</div>
-      <h1 class="sidecar-section-title">📊 Your Progress</h1>
+      <div class="sidecar-mode-badge"><i data-lucide="bar-chart-3"></i>Your Progress</div>
+      <h1 class="sidecar-section-title">📊 Stats</h1>
       <p class="sidecar-section-sub">Quick overview of how you're doing.</p>
     </div>
 
@@ -2427,7 +2550,6 @@ function SidecarProgressTab() {
     </div>
   `;
 }
-
 // ─── QR CODE MODAL (Desktop Practice Page) ───────────────────
 function QRModal() {
   const baseUrl = window.location.origin + window.location.pathname;
@@ -2642,9 +2764,30 @@ async function sendSidecarMessage(text) {
   let response;
   if (S.sidecarImage) {
     const ctx = S.sidecarContext ? `${S.sidecarContext.subjectName} - ${S.sidecarContext.kcName}` : '';
-    response = await analyzeWorkingImage(S.sidecarImage.base64, S.sidecarImage.mimeType, displayText, ctx);
+    const questionContext = S.sidecarLiveQuestion ? `\n\nCurrent question: ${S.sidecarLiveQuestion.text}` : '';
+    response = await analyzeWorkingImage(S.sidecarImage.base64, S.sidecarImage.mimeType, displayText, ctx + questionContext);
 
-    // Also save to doubts feed so it appears on desktop
+    // ── Push image + AI response to Firestore so desktop sees it in real-time ──
+    try {
+      if (S.user && db) {
+        const compressedDataUrl = await compressImage(S.sidecarImage.dataUrl);
+        const sessionRef = doc(db, 'sessions', S.user.uid);
+        await setDoc(sessionRef, {
+          sidecarImage: {
+            dataUrl: compressedDataUrl,
+            aiResponse: response,
+            questionId: S.sidecarLiveQuestion?.qId || null,
+            questionText: S.sidecarLiveQuestion?.text || null,
+            prompt: displayText,
+            timestamp: Date.now(),
+          }
+        }, { merge: true });
+      }
+    } catch (err) {
+      console.error('Failed to push sidecar image to Firestore:', err);
+    }
+
+    // Also save to doubts feed (local + cloud backup)
     const doubt = {
       id: 'd' + Date.now(),
       text: `📸 [Image] ${displayText}`,
@@ -2815,6 +2958,14 @@ onAuthChange(async (user) => {
     }
     // Read URL params for sidecar context after auth + data load
     readURLParams();
+    // Start real-time cross-device session sync
+    subscribeToSession(user.uid);
+  } else {
+    // User signed out — tear down session listener
+    if (S.sidecarSessionUnsubscribe) {
+      S.sidecarSessionUnsubscribe();
+      S.sidecarSessionUnsubscribe = null;
+    }
   }
   S.authLoading = false;
   render();

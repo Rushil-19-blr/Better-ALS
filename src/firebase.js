@@ -1,6 +1,6 @@
 import { initializeApp } from "firebase/app";
 import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged, browserLocalPersistence, setPersistence } from "firebase/auth";
-import { getFirestore, collection, doc, setDoc, getDoc, getDocs, addDoc, query, where } from "firebase/firestore";
+import { getFirestore, collection, doc, setDoc, getDoc, getDocs, addDoc, query, where, onSnapshot } from "firebase/firestore";
 
 const firebaseConfig = {
   apiKey: "AIzaSyB8M-Q2shFvnRDPuyPJ3TZ1kfS6IZt_QaM",
@@ -39,4 +39,4 @@ export const onAuthChange = (callback) => {
   return onAuthStateChanged(auth, callback);
 };
 
-export { auth, db };
+export { auth, db, onSnapshot };
