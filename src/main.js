@@ -841,16 +841,6 @@ function Sidebar() {
     <div class="nav-spacer"></div>
     <div class="nav-divider"></div>
     <a class="nav-item ${S.page === 'settings' ? 'active' : ''}" data-nav="settings"><i data-lucide="settings"></i><span class="nav-label">Settings</span></a>
-    
-    <div class="user-profile" style="display:flex;align-items:center;gap:0.8rem;padding:0.6rem;width:calc(100% - 0.75rem);margin:0 0.375rem;border-radius:var(--radius-md);background:var(--bg-elevated);">
-      <img src="${S.user?.photoURL || 'https://api.dicebear.com/7.x/avataaars/svg?seed=' + (S.user?.uid || 'user')}" alt="User Avatar" style="width:32px;height:32px;border-radius:50%;flex-shrink:0;border:2px solid var(--accent);">
-      <div class="user-info" style="display:flex;flex-direction:column;min-width:0;">
-        <span style="font-size:0.8rem;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--text);">${S.user?.displayName || 'Student'}</span>
-        <span style="font-size:0.65rem;color:var(--text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${S.user?.email || ''}</span>
-      </div>
-    </div>
-    
-    <a class="nav-item" id="btn-sidebar-logout" style="margin-top:0.25rem;"><i data-lucide="log-out" style="color:var(--red);"></i><span class="nav-label" style="color:var(--red);">Log Out</span></a>
   </nav>`;
 }
 
@@ -901,7 +891,7 @@ function LoginPage() {
         <!-- Special-text scramble badge -->
         <div style="display:inline-flex;align-items:center;gap:0.5rem;background:rgba(178,43,61,0.08);color:var(--accent);padding:0.5rem 1.25rem;border-radius:999px;font-size:0.78rem;font-weight:700;margin-bottom:2.5rem;border:1px solid rgba(178,43,61,0.18);letter-spacing:0.02em;">
           <i data-lucide="sparkles" style="width:14px;height:14px;flex-shrink:0;"></i>
-          <span class="special-text-badge" id="badge-scramble">THE ADVANCED LEARNING SYSTEM</span>
+          <span class="special-text-badge" id="badge-scramble">ASSISTED LEARNING SYSTEM</span>
         </div>
 
         <!-- Typewriter H1 -->
@@ -936,7 +926,7 @@ function bindLogin() {
 
   // ── Badge scramble ───────────────────────────────────────
   const badgeEl = document.getElementById('badge-scramble');
-  if (badgeEl) startSpecialTextScramble(badgeEl, 'THE ADVANCED LEARNING SYSTEM', { speed: 20, delay: 200 });
+  if (badgeEl) startSpecialTextScramble(badgeEl, 'ASSISTED LEARNING SYSTEM', { speed: 20, delay: 200 });
 
   // ── Typewriter hero ──────────────────────────────────────
   const twEl = document.getElementById('tw-target');
@@ -1023,6 +1013,12 @@ function HomePage() {
   const firstName = S.user?.displayName?.split(' ')[0] || 'Student';
   return `
     <div class="home-page-wrap">
+    <div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:1.5rem;padding:0.5rem 1.5rem 0 1.5rem;">
+      <div style="background:white;padding:0.2rem;border-radius:4px;display:flex;align-items:center;justify-content:center;">
+        <img src="https://upload.wikimedia.org/wikipedia/en/thumb/5/52/National_Public_School_Rajajinagar_Logo.png/220px-National_Public_School_Rajajinagar_Logo.png" alt="NPS" style="height:40px;object-fit:contain;">
+      </div>
+      <div style="font-weight:800;font-size:1.15rem;letter-spacing:1px;color:var(--text);text-transform:uppercase;">National Public School</div>
+    </div>
     <header class="page-header">
       <div><h1 class="greeting" id="home-greeting">Hi ${firstName},</h1><p class="greeting-sub">Let's keep the momentum going.</p></div>
       <div class="header-actions">
@@ -1634,7 +1630,10 @@ function DoubtsPage() {
       <div class="form-group" style="margin-top:1rem"><label class="form-label">Your Doubt</label><textarea class="form-input" id="doubt-text" rows="3" placeholder="Describe what you're stuck on..."></textarea></div>
       <button class="btn-action primary" id="doubt-submit" style="margin-top:1rem"><i data-lucide="send"></i>Submit Doubt</button>
     </div>
-    <div class="section-title">Recent Doubts</div>
+    <div class="section-title" style="display:flex;justify-content:space-between;align-items:center;">
+      <span>Recent Doubts</span>
+      <button class="btn-action secondary" style="font-size:0.8rem;padding:0.3rem 0.6rem;min-height:0;"><i data-lucide="filter" style="width:14px;height:14px"></i>Filter</button>
+    </div>
     <div class="doubts-list">
       ${S.doubts.length === 0 ? '<div class="empty-state"><i data-lucide="help-circle"></i><h3>No doubts yet</h3><p>Ask a question above to get started</p></div>' : 
         S.doubts.map(d => `
@@ -1645,7 +1644,7 @@ function DoubtsPage() {
             </div>
             <p style="font-size:0.95rem;margin:0 0 1rem 0">${d.text}</p>
             ${d.response ? `
-              <div style="background:var(--bg-body);padding:1rem;border-radius:var(--radius-md);border-left:3px solid var(--accent)">
+              <div style="background:var(--bg-body);padding:1rem;border-radius:var(--radius-md);">
                 <div style="font-size:0.8rem;font-weight:700;color:var(--accent);margin-bottom:0.5rem;display:flex;align-items:center;gap:0.35rem"><i data-lucide="sparkles" style="width:14px;height:14px"></i>AI Teacher</div>
                 <div style="font-size:0.9rem;line-height:1.5">${d.response}</div>
                 ${!d.teacherAsked ? `<button class="btn-action secondary ask-teacher-btn" data-doubt-id="${d.id}" style="margin-top:0.75rem"><i data-lucide="mail"></i>Ask Human Teacher</button>` : `<div style="margin-top:0.75rem;font-size:0.8rem;color:var(--green);display:flex;align-items:center;gap:0.35rem"><i data-lucide="check" style="width:14px;height:14px"></i> Forwarded to teacher</div>`}

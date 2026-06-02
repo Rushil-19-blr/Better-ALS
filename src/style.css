@@ -807,6 +807,7 @@ ul,ol{list-style:none}
    ══════════════════════════════════════════════════ */
 .matrix-char {
   display:inline-block;
+  white-space: pre-wrap;
   transition:color 0.05s ease, text-shadow 0.05s ease;
 }
 .matrix-char.flipping {
